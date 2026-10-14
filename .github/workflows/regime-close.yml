@@ -1,4 +1,6 @@
-# After-close read, 16:25 New York, dispatched by meridian-clock (schedule.json).
+# Close read, 16:25 New York, dispatched by meridian-clock (schedule.json).
+# 16:25, not 16:05: the closing auction prints at 16:00, VIX settles at 16:15, and the free
+# consolidated-tape feed only serves data at least 15 minutes old.
 # Do not add a `schedule:` block: the clock counts any run today as "already ran".
 name: Regime (close)
 
@@ -17,3 +19,4 @@ concurrency:
 jobs:
   publish:
     uses: ./.github/workflows/publish.yml
+    secrets: inherit

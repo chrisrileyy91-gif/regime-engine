@@ -1,6 +1,7 @@
-# Intraday read, 10:15 New York, dispatched by meridian-clock (schedule.json).
+# Morning read, 06:00 New York, dispatched by meridian-clock (schedule.json).
+# Finalizes the prior US session from official sources and picks up the overnight Korea session.
 # Do not add a `schedule:` block: the clock counts any run today as "already ran".
-name: Regime (open)
+name: Regime (morning)
 
 on:
   workflow_dispatch:
@@ -17,3 +18,4 @@ concurrency:
 jobs:
   publish:
     uses: ./.github/workflows/publish.yml
+    secrets: inherit

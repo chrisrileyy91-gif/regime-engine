@@ -8,9 +8,11 @@ import pytest
 
 from app.data import FetchResult
 
+TODAY = pd.Timestamp.today().normalize()
 
-def series(values: Sequence[float], end: str = "2026-10-12") -> pd.Series:
-    index = pd.bdate_range(end=end, periods=len(values))
+
+def series(values: Sequence[float], end: str | pd.Timestamp | None = None) -> pd.Series:
+    index = pd.bdate_range(end=end if end is not None else TODAY, periods=len(values))
     return pd.Series(np.asarray(values, dtype=float), index=index)
 
 
@@ -27,26 +29,49 @@ def trend(start: float, end: float, n: int = 300, noise: float = 0.004) -> pd.Se
     return series(base * (1 + rng.normal(0, noise, n)))
 
 
-def ok(key: str, s: pd.Series, source: str = "yahoo") -> FetchResult:
-    return FetchResult(key=key, symbol=key.upper(), source=source, series=s)
+def ok(key: str, s: pd.Series, source: str | None = None) -> FetchResult:
+    src = source or key.split("@")[1]
+    return FetchResult(key=key, symbol=key.split("@")[0].upper(), source=src, series=s)
 
 
-def failed(key: str, source: str = "yahoo") -> FetchResult:
-    return FetchResult(key=key, symbol=key.upper(), source=source, series=None, error="boom")
+def failed(key: str, error: str = "boom") -> FetchResult:
+    return FetchResult(key=key, symbol=key.split("@")[0].upper(), source=key.split("@")[1], series=None, error=error)
+
+
+def market(**series_by_input: pd.Series) -> dict[str, FetchResult]:
+    """Every official source and check for each input, all agreeing (override per input)."""
+    base = {
+        "y10": flat_then(4.0),
+        "t3m": flat_then(4.30),
+        "vix": flat_then(15.0),
+        "effr": flat_then(4.33),
+        "soxx": trend(200, 260),
+        "igv": trend(90, 95),
+        "dxy": flat_then(100.0),
+        "kospi": trend(2500, 2700),
+        "samsung": trend(60000, 70000),
+    }
+    base.update(series_by_input)
+    sources = {
+        "y10": ("cboe", "yahoo", "treasury"),
+        "t3m": ("cboe", "yahoo", "treasury"),
+        "vix": ("cboe", "yahoo"),
+        "effr": ("nyfed",),
+        "soxx": ("alpaca", "yahoo"),
+        "igv": ("alpaca", "yahoo"),
+        "dxy": ("eodhd", "yahoo", "ecb"),
+        "kospi": ("eodhd", "krx", "yahoo"),
+        "samsung": ("eodhd", "krx", "yahoo"),
+    }
+    out = {}
+    for name, srcs in sources.items():
+        for src in srcs:
+            key = f"{name}@{src}"
+            out[key] = ok(key, base[name].copy())
+    return out
 
 
 @pytest.fixture
 def calm_market() -> dict[str, FetchResult]:
-    """10Y ~4.0% and flat, VIX ~15, SOXX in steady uptrend, no cuts priced, DXY ~100."""
-    return {
-        "tnx": ok("tnx", flat_then(4.0)),
-        "vix": ok("vix", flat_then(15.0)),
-        "soxx": ok("soxx", trend(200, 260)),
-        "igv": ok("igv", trend(90, 95)),
-        "ks11": ok("ks11", trend(2500, 2700)),
-        "dxy": ok("dxy", flat_then(100.0)),
-        "samsung": ok("samsung", trend(60000, 70000)),
-        "dgs10": ok("dgs10", flat_then(4.0), "fred"),
-        "dgs2": ok("dgs2", flat_then(4.30), "fred"),
-        "effr": ok("effr", flat_then(4.33), "fred"),
-    }
+    """10Y ~4.0% flat, VIX ~15, SOXX in steady uptrend, no cuts priced, DXY ~100."""
+    return market()

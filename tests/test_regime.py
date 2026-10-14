@@ -9,6 +9,7 @@ from app.regime import classify, decision_matrix, semi_momentum_label, telemetry
 def calm(**overrides: object) -> MarketFeatures:
     base = MarketFeatures(
         tnx_pct=4.00,
+        tnx_pctile=50.0,
         tnx_chg_1d_bps=1.0,
         tnx_chg_5d_bps=2.0,
         tnx_delta_z=0.3,
@@ -17,9 +18,9 @@ def calm(**overrides: object) -> MarketFeatures:
         ratio_sma_rising=False,
         ratio_below_trough_mean=False,
         dxy=100.0,
-        dgs2_pct=4.30,
+        bill_3m_pct=4.30,
         effr_pct=4.33,
-        effr_minus_2y_pct=0.03,
+        effr_minus_3m_pct=0.03,
     )
     for key, value in overrides.items():
         setattr(base, key, value)
@@ -36,13 +37,14 @@ def test_spec_dead_zone_bug_squeeze_with_mid_rsi_is_phase_2() -> None:
 @pytest.mark.parametrize(
     ("overrides", "phase_id", "confidence"),
     [
-        ({"tnx_pct": 4.50}, 2, "FULL"),
+        ({"tnx_pctile": 85.0}, 2, "FULL"),
+        ({"tnx_pct": 5.22, "tnx_pctile": 60.0}, 0, "FULL"),  # high level alone no longer fires
         ({"tnx_delta_z": 2.1}, 2, "FULL"),
         ({"vix": 21.0, "soxx_rsi": 62.0}, 2, "FULL"),  # squeeze overrides strong semis
         ({"soxx_rsi": 60.0}, 1, "FULL"),
         ({"soxx_rsi": 60.0, "tnx_chg_5d_bps": 8.0}, 0, "FULL"),  # yields rising: no Phase 1
-        ({"effr_minus_2y_pct": 0.40, "dxy": 100.0, "soxx_rsi": 60.0}, 4, "FULL"),  # 4 beats 1
-        ({"effr_minus_2y_pct": 0.40, "dxy": 103.0}, 0, "FULL"),  # strong dollar blocks 4
+        ({"effr_minus_3m_pct": 0.40, "dxy": 100.0, "soxx_rsi": 60.0}, 4, "FULL"),  # 4 beats 1
+        ({"effr_minus_3m_pct": 0.40, "dxy": 103.0}, 0, "FULL"),  # strong dollar blocks 4
         ({"ratio_sma_rising": True, "ratio_below_trough_mean": True}, 3, "PARTIAL"),
         ({"ratio_sma_rising": True, "ratio_below_trough_mean": False}, 0, "FULL"),
         ({}, 0, "FULL"),  # nothing fires -> Unclassified, never a default Phase 3
@@ -54,7 +56,7 @@ def test_phase_table(overrides: dict[str, object], phase_id: int, confidence: st
 
 
 def test_missing_vix_with_high_yield_still_fires_squeeze() -> None:
-    result = classify(calm(vix=None, tnx_pct=4.6))
+    result = classify(calm(vix=None, tnx_pctile=90.0))
     assert result.spec.phase_id == 2 and result.confidence == "FULL"
 
 
@@ -85,7 +87,7 @@ def test_semi_momentum_labels(rsi: float | None, label: str) -> None:
 
 
 def test_telemetry_yield_spike_triggers_drain_below_level() -> None:
-    signals = {s.indicator: s for s in telemetry(calm(tnx_pct=4.10, tnx_chg_1d_bps=12.0))}
+    signals = {s.indicator: s for s in telemetry(calm(tnx_pctile=40.0, tnx_chg_1d_bps=12.0))}
     assert signals["10Y Treasury Yield"].triggered is True
 
 

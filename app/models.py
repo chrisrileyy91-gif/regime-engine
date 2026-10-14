@@ -31,12 +31,48 @@ class TelemetrySignal(BaseModel):
     tone: str = "risk"  # "risk" or "constructive" — how a triggered signal should read
 
 
+class QualityIssue(BaseModel):
+    severity: str  # "warn" (a reader should know) or "info" (handled automatically)
+    message: str
+
+
+class Preliminary(BaseModel):
+    value: float
+    date: str
+    source: str
+
+
+class InputStatus(BaseModel):
+    """Verification result for one input. `value` is None unless the official record is usable."""
+
+    key: str
+    label: str
+    status: str  # VERIFIED / OFFICIAL / CONFLICT / MISSING
+    value: float | None
+    date: str | None
+    source: str | None  # official source actually used
+    confirmed_by: list[str] = []
+    notes: list[str] = []
+    stale: bool = False
+    used_in_call: bool = True
+    preliminary: Preliminary | None = None  # newer unofficial value, never used in the call
+
+
+class DataQuality(BaseModel):
+    status: str  # OK / DEGRADED / STALE
+    summary: str
+    issues: list[QualityIssue] = []
+    inputs: list[InputStatus] = []
+
+
 class DriverMetric(BaseModel):
     label: str
     value: float | None
     unit: str  # "%", "bps", "z", "pts", "" — display hint for the page
     trigger: str | None  # None = context only, not a trigger
     met: bool | None
+    as_of: str | None = None  # date of the official value
+    preliminary: Preliminary | None = None
 
 
 class Driver(BaseModel):
@@ -78,7 +114,10 @@ class RegimeStatus(BaseModel):
     stale_reason: str | None = None
     matrix: DecisionMatrix
     diagnosis: str = ""
+    backdrop: str = ""  # slow-moving context (levels), deliberately separate from the diagnosis
     drivers: list[Driver] = []
+    data_quality: DataQuality | None = None
+    input_dates: dict[str, str] = {}
     rules: list[RuleEvaluation]
     telemetry: list[TelemetrySignal]
     inputs: dict[str, object]

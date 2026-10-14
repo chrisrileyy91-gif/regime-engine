@@ -1,15 +1,34 @@
 # Run the regime engine once and publish the phone page to GitHub Pages.
 #
-# Called by regime-open.yml (10:15 NY) and regime-close.yml (16:25 NY), which meridian-clock
+# Called by regime-morning.yml (06:00 NY) and regime-close.yml (16:25 NY), which meridian-clock
 # dispatches on weekdays. Two caller files exist because the clock fires each workflow file at
 # most once per NY day ("any run today means skip"). Can also be run by hand from Actions.
 #
-# State (the last regime.json and the rolling history.json) lives as assets on the "snapshots"
-# release of this repo, not in git, so publishing never creates commits on main.
+# State lives as assets on the "snapshots" release, never in git: regime.json (last read),
+# history.json (rolling reads) and krx_cache.json (official KRX closes, one API call per date).
+#
+# Secrets (repo settings): APCA_API_KEY_ID, APCA_API_SECRET_KEY (consolidated-tape closes),
+# EODHD_API_KEY (optional: Korea end-of-day, live FX for the dollar index), KRX_API_KEY
+# (optional: official Korea history check), ANTHROPIC_API_KEY (last-resort gap filler, capped
+# by CLAUDE_MONTHLY_BUDGET_USD), DISCORD_PHEME_WEBHOOK (alerts). Each is optional: without it,
+# the matching inputs show as unavailable and Pheme stays silent.
 name: Publish regime (shared)
 
 on:
   workflow_call:
+    secrets:
+      APCA_API_KEY_ID:
+        required: false
+      APCA_API_SECRET_KEY:
+        required: false
+      KRX_API_KEY:
+        required: false
+      EODHD_API_KEY:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+      DISCORD_PHEME_WEBHOOK:
+        required: false
   workflow_dispatch:
 
 permissions:
@@ -23,7 +42,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -34,7 +53,7 @@ jobs:
       - name: Install
         run: python -m pip install -e .
 
-      - name: Restore previous snapshot and history
+      - name: Restore previous snapshot, history and KRX cache
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -43,7 +62,7 @@ jobs:
             # The release exists, so a failed download must stop the run rather than
             # publish over the stored history with an empty one.
             assets=$(gh release view "$RELEASE" --json assets -q '.assets[].name')
-            for f in regime.json history.json; do
+            for f in regime.json history.json krx_cache.json claude_usage.json; do
               if grep -qx "$f" <<< "$assets"; then
                 gh release download "$RELEASE" --pattern "$f" --dir state --clobber
               fi
@@ -51,16 +70,35 @@ jobs:
           else
             echo "::warning::No '$RELEASE' release yet; starting fresh."
             gh release create "$RELEASE" --title "Snapshots" \
-              --notes "Latest regime read and rolling history, updated by the publish workflow. Not a software release."
+              --notes "Latest regime read, rolling history and KRX cache, updated by the publish workflow. Not a software release."
           fi
 
       - name: Run the engine
+        id: engine
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+          KRX_API_KEY: ${{ secrets.KRX_API_KEY }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python -m app.snapshot --state state --site site
 
-      - name: Save snapshot and history
+      - name: Save snapshot, history, KRX cache and Claude spend ledger
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$RELEASE" state/regime.json state/history.json --clobber
+        run: gh release upload "$RELEASE" state/regime.json state/history.json state/krx_cache.json state/claude_usage.json --clobber
+
+      - name: Alert Pheme if the read is degraded, stale or missing
+        if: always()
+        env:
+          DISCORD_PHEME_WEBHOOK: ${{ secrets.DISCORD_PHEME_WEBHOOK }}
+          RUN_CONTEXT: ${{ github.workflow }}
+        run: |
+          if [ "${{ steps.engine.outcome }}" = "success" ]; then
+            python -m app.alert site/regime.json
+          else
+            python -m app.alert /nonexistent.json
+          fi
 
       - name: Run summary
         if: always()
@@ -68,7 +106,7 @@ jobs:
           {
             echo "### Regime publish"
             if [ -f site/regime.json ]; then
-              python -c "import json;d=json.load(open('site/regime.json'));print(f\"**{d['phase']}** · risk {d['risk_level']} · confidence {d['confidence']} · stale {d['stale']}\");print();print(d.get('diagnosis',''))"
+              python -c "import json;d=json.load(open('site/regime.json'));q=d.get('data_quality') or {};print(f\"**{d['phase']}** · risk {d['risk_level']} · data {q.get('status')} · stale {d['stale']}\");print();print(d.get('diagnosis',''));print();[print(f\"- {i['status']} {i['label']}: {i['value']} ({i['date']}, {i['source']})\") for i in q.get('inputs',[])]"
             else
               echo "No snapshot written."
             fi

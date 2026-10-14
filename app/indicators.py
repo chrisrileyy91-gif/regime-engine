@@ -68,6 +68,15 @@ def change_pct(series: pd.Series, sessions: int) -> float | None:
     return (float(series.iloc[-1]) / prior - 1.0) * 100.0
 
 
+def percentile_rank(series: pd.Series, window: int) -> float | None:
+    """Percent of the trailing `window` observations (today included) at or below today's value."""
+    clean = series.dropna()
+    if len(clean) < window:
+        return None
+    tail = clean.iloc[-window:].to_numpy(dtype=float)
+    return float((tail <= tail[-1]).mean() * 100.0)
+
+
 def latest_change_zscore(series: pd.Series, window: int) -> float | None:
     """z = (today's 1-session change - mean(prior changes)) / std(prior changes).
 

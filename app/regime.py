@@ -88,10 +88,10 @@ PRECEDENCE = (2, 4, 1, 3)
 def evaluate_rules(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[RuleEvaluation]:
     p2 = [
         Condition(
-            name="10Y yield level (%)",
-            value=f.tnx_pct,
-            threshold=f"> {t.tnx_level_pct}",
-            met=_gt(f.tnx_pct, t.tnx_level_pct),
+            name="10Y vs its past year (percentile)",
+            value=f.tnx_pctile,
+            threshold=f"> {t.tnx_pctile_high:.0f}th percentile of {t.tnx_pctile_window} sessions",
+            met=_gt(f.tnx_pctile, t.tnx_pctile_high),
         ),
         Condition(
             name="10Y 1d change z-score",
@@ -103,10 +103,10 @@ def evaluate_rules(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[RuleEv
     ]
     p4 = [
         Condition(
-            name="EFFR minus 2Y (pp) — cuts-priced proxy",
-            value=f.effr_minus_2y_pct,
+            name="EFFR minus 3M bill (pp) — cuts-priced proxy",
+            value=f.effr_minus_3m_pct,
             threshold=f"> {t.cuts_priced_spread_pct}",
-            met=_gt(f.effr_minus_2y_pct, t.cuts_priced_spread_pct),
+            met=_gt(f.effr_minus_3m_pct, t.cuts_priced_spread_pct),
         ),
         Condition(name="DXY", value=f.dxy, threshold=f"< {t.dxy_easing_max}", met=_lt(f.dxy, t.dxy_easing_max)),
     ]
@@ -197,11 +197,11 @@ def decision_matrix(f: MarketFeatures, c: Classification, t: Thresholds = THRESH
 
 
 def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySignal]:
-    tnx_level = _gt(f.tnx_pct, t.tnx_level_pct)
+    tnx_level = _gt(f.tnx_pctile, t.tnx_pctile_high)
     tnx_spike = _gt(f.tnx_chg_1d_bps, t.tnx_1d_spike_bps)
     tnx_triggered = _any(
         [
-            Condition(name="lvl", value=f.tnx_pct, threshold="", met=tnx_level),
+            Condition(name="lvl", value=f.tnx_pctile, threshold="", met=tnx_level),
             Condition(name="spike", value=f.tnx_chg_1d_bps, threshold="", met=tnx_spike),
         ]
     )
@@ -211,15 +211,18 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
     return [
         TelemetrySignal(
             indicator="10Y Treasury Yield",
-            source=f.tnx_source or "unavailable",
+            source="U.S. Treasury",
             value=f.tnx_pct,
-            trigger=f"> {t.tnx_level_pct}% or +{t.tnx_1d_spike_bps:.0f} bps / 1 session",
+            trigger=(
+                f"above the {t.tnx_pctile_high:.0f}th percentile of its past year, "
+                f"or +{t.tnx_1d_spike_bps:.0f} bps in a session"
+            ),
             triggered=tnx_triggered,
             signal="LIQUIDITY DRAIN",
         ),
         TelemetrySignal(
             indicator="Vol Index (VIX)",
-            source="yahoo:^VIX",
+            source="Cboe",
             value=f.vix,
             trigger=f"> {t.vix_level}",
             triggered=_gt(f.vix, t.vix_level),
@@ -227,7 +230,7 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
         ),
         TelemetrySignal(
             indicator="Semi Momentum (SOXX RSI14)",
-            source="yahoo:SOXX",
+            source="consolidated tape",
             value=f.soxx_rsi,
             trigger=f"< {t.semi_rsi_digestion}",
             triggered=_lt(f.soxx_rsi, t.semi_rsi_digestion),
@@ -235,7 +238,7 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
         ),
         TelemetrySignal(
             indicator="Semi Momentum (Samsung RSI14)",
-            source="yahoo:005930.KS",
+            source="Korea Exchange",
             value=f.samsung_rsi,
             trigger=f"< {t.semi_rsi_digestion}",
             triggered=_lt(f.samsung_rsi, t.semi_rsi_digestion),
@@ -243,7 +246,7 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
         ),
         TelemetrySignal(
             indicator="Software vs Hardware (IGV/SOXX)",
-            source="yahoo:IGV,SOXX",
+            source="consolidated tape",
             value=f.igv_soxx_ratio,
             trigger=f"SMA{t.ratio_sma_window} rising over {t.ratio_slope_lookback} sessions",
             triggered=f.ratio_sma_rising,
@@ -252,7 +255,7 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
         ),
         TelemetrySignal(
             indicator="Korean Equity Pulse (KOSPI)",
-            source="yahoo:^KS11",
+            source="Korea Exchange",
             value=f.ks11,
             trigger=f"close above SMA{t.ks11_sma_window}",
             triggered=ks11_above,
@@ -261,7 +264,7 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
         ),
         TelemetrySignal(
             indicator="US Dollar Index",
-            source="yahoo:DX-Y.NYB",
+            source="ECB rates, ICE formula",
             value=f.dxy,
             trigger=f"> {t.dxy_compression}",
             triggered=_gt(f.dxy, t.dxy_compression),

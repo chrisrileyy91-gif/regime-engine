@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from app.cache import SnapshotStore
+from app.claude_fill import FillReport, apply_fills
 from app.data import FetchResult, fetch_all
-from app.drivers import build_drivers, diagnose
+from app.drivers import backdrop, build_drivers, diagnose
 from app.features import build_features
-from app.models import RegimeStatus, SourceStatus
+from app.models import QualityIssue, RegimeStatus, SourceStatus
 from app.regime import classify, decision_matrix, telemetry
+from app.verify import assess, verify_all
 
 Fetcher = Callable[[], Awaitable[dict[str, FetchResult]]]
 
@@ -19,16 +21,31 @@ class EngineUnavailable(Exception):
     pass
 
 
-def build_status(results: dict[str, FetchResult]) -> RegimeStatus:
-    features = build_features(results)
+def build_status(
+    results: dict[str, FetchResult], today: date | None = None, fills: FillReport | None = None
+) -> RegimeStatus:
+    today = today or datetime.now(timezone.utc).date()
+    verified = verify_all(results, today)
+    if fills is not None:
+        verified = apply_fills(verified, fills)
+    quality = assess(verified)
+    if fills is not None:
+        for key in fills.fills:
+            quality.issues.append(
+                QualityIssue(severity="info", message=f"{verified[key].status.label}: filled by Claude web search")
+            )
+        quality.issues += [QualityIssue(severity="info", message=n) for n in fills.notes]
+    features = build_features(verified)
     result = classify(features)
     squeeze = next(r.fired for r in result.rules if r.phase_id == 2)
-    drivers = build_drivers(features)
-    notes = list(features.notes)
+    drivers = build_drivers(features, {k: v.status for k, v in verified.items()})
+    notes: list[str] = []
     if result.confidence == "PARTIAL":
         notes.append("Phase 3 called on the IGV/SOXX ratio alone; the SaaS ARR leg has no data feed.")
     if result.confidence == "PROVISIONAL":
-        notes.append("A higher-precedence rule could not be evaluated (missing data); call is provisional.")
+        notes.append(
+            "A higher-precedence rule could not be evaluated (input withheld or missing); call is provisional."
+        )
     return RegimeStatus(
         phase=result.spec.name,
         risk_level=result.spec.risk,
@@ -41,7 +58,10 @@ def build_status(results: dict[str, FetchResult]) -> RegimeStatus:
         as_of=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         matrix=decision_matrix(features, result),
         diagnosis=diagnose(features, drivers),
+        backdrop=backdrop(features),
         drivers=drivers,
+        data_quality=quality,
+        input_dates=dict(features.dates),
         rules=result.rules,
         telemetry=telemetry(features),
         inputs=features.as_dict(),

@@ -178,6 +178,26 @@
   .changes li { padding: 7px 0; border-top: 1px solid var(--rule); display: flex; justify-content: space-between; gap: 12px; }
   .changes .when { color: var(--ink-3); white-space: nowrap; }
 
+  .notice { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: 14px; background: var(--moderate-soft); border-left: 3px solid var(--moderate); }
+  .notice.bad { background: var(--high-soft); border-left-color: var(--high); }
+  .notice ul { margin: 6px 0 0; padding-left: 18px; }
+  .quality-ok { margin-top: 8px; font-size: 13px; color: var(--ink-3); display: flex; gap: 6px; align-items: center; }
+  .quality-ok::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--low); }
+  .backdrop { margin-top: 10px; font-size: 14px; color: var(--ink-2); }
+  .backdrop b { font-weight: 600; color: var(--ink); }
+  .m-date { color: var(--ink-3); }
+  .m-prelim { grid-column: 1 / -1; font-size: 12.5px; color: var(--moderate); }
+  .inputs { margin-top: 12px; background: var(--surface); border-radius: 12px; padding: 2px 14px; }
+  .input { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 11px 0; border-top: 1px solid var(--rule); }
+  .input:first-child { border-top: 0; }
+  .i-name { font-size: 14.5px; font-weight: 500; }
+  .i-value { font-weight: 600; font-size: 14.5px; text-align: right; }
+  .i-meta { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink-3); }
+  .badge { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; margin-right: 6px; }
+  .badge.VERIFIED { background: var(--low-soft); color: var(--low); }
+  .badge.OFFICIAL { background: var(--unknown-soft); color: var(--ink-2); }
+  .badge.CONFLICT, .badge.MISSING, .badge.UNCONFIRMED { background: var(--high-soft); color: var(--high); }
+  .badge.STALE { background: var(--moderate-soft); color: var(--moderate); }
   footer { margin-top: 34px; font-size: 13px; color: var(--ink-3); display: grid; gap: 8px; }
   footer ul { margin: 0; padding-left: 18px; }
   .error { margin-top: 40px; padding: 16px; background: var(--surface); border-radius: 12px; }
@@ -197,6 +217,9 @@
     <p class="updated" id="updated">Loading…</p>
   </header>
   <div class="stale" id="stale" hidden></div>
+  <div class="notice bad" id="missed" hidden></div>
+  <div class="notice" id="quality" hidden></div>
+  <p class="quality-ok" id="quality-ok" hidden></p>
 
   <div id="content" hidden>
     <div class="hero">
@@ -210,6 +233,7 @@
     <section>
       <h2>Why semis are moving</h2>
       <p class="diagnosis" id="diagnosis"></p>
+      <p class="backdrop" id="backdrop" hidden></p>
       <div class="drivers" id="drivers"></div>
     </section>
 
@@ -224,6 +248,12 @@
       <div class="signals" id="signals"></div>
     </section>
 
+    <section>
+      <h2>Where every number comes from</h2>
+      <p class="lede">Verified means an independent source agrees on the same date. Official means it comes straight from the source of record. A number that fails a check is withheld, never guessed.</p>
+      <div class="inputs" id="inputs"></div>
+    </section>
+
     <section id="history-section" hidden>
       <h2>Recent reads</h2>
       <div class="strip" id="strip" aria-hidden="true"></div>
@@ -232,9 +262,8 @@
     </section>
 
     <footer>
-      <p id="feeds"></p>
       <ul id="notes"></ul>
-      <p>Rule-based read of public market data. Thresholds come from the original spec and are not yet backtested. Not a trading signal.</p>
+      <p>Updates weekdays at 6:00 AM (prior US session plus the overnight Korea session) and 4:25 PM ET. Rule-based read of official market data. Thresholds are not yet backtested. Not a trading signal.</p>
     </footer>
   </div>
 
@@ -254,10 +283,13 @@
   };
   const SHORT = { 1: "Buildout", 2: "Squeeze", 3: "Monetization", 4: "Easing" };
   const CONFIDENCE = {
-    FULL: "All inputs present",
+    FULL: "All rule inputs present",
     PARTIAL: "Partial evidence",
     PROVISIONAL: "Provisional, data missing",
   };
+  const SCHEDULE_NY = ["06:00", "16:25"];  // mirrors meridian-clock schedule.json
+  const GRACE_MINUTES = 60;
+  const STATUS_TEXT = { VERIFIED: "Verified", OFFICIAL: "Official", CONFLICT: "Withheld", UNCONFIRMED: "Withheld", MISSING: "Unavailable" };
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const nyTime = (iso, opts) => new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", ...opts });
@@ -274,7 +306,44 @@
     }
   }
 
+  const dayLabel = (iso) => iso ? new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }) : "";
+
+  function nyParts(date) {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23", weekday: "short",
+    }).formatToParts(date).map((p) => [p.type, p.value]));
+    return { ymd: `${parts.year}-${parts.month}-${parts.day}`, minutes: Number(parts.hour) * 60 + Number(parts.minute), weekday: parts.weekday };
+  }
+
+  // The most recent scheduled run that should have published by now (weekdays, NY time).
+  function lastExpectedRun(now) {
+    for (let back = 0; back < 7; back++) {
+      const probe = new Date(now.getTime() - back * 86400000);
+      const p = nyParts(probe);
+      if (p.weekday === "Sat" || p.weekday === "Sun") continue;
+      const slots = SCHEDULE_NY.map((t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3))).sort((a, b) => b - a);
+      for (const slot of slots) {
+        if (back > 0 || slot + GRACE_MINUTES <= p.minutes) return { ymd: p.ymd, minutes: slot };
+      }
+    }
+    return null;
+  }
+
+  function missedRun(asOfIso) {
+    const expected = lastExpectedRun(new Date());
+    if (!expected) return null;
+    const read = nyParts(new Date(asOfIso));
+    const readKey = `${read.ymd} ${String(read.minutes).padStart(4, "0")}`;
+    const expKey = `${expected.ymd} ${String(expected.minutes).padStart(4, "0")}`;
+    if (readKey >= expKey) return null;
+    const hh = Math.floor(expected.minutes / 60), mm = String(expected.minutes % 60).padStart(2, "0");
+    const label = `${hh % 12 || 12}:${mm} ${hh < 12 ? "AM" : "PM"}`;
+    return `The ${label} update on ${dayLabel(expected.ymd)} didn't publish. You're looking at an older read; check the regime-engine Actions tab or Pheme in Discord.`;
+  }
+
   function guessUnit(name) {
+    if (/percentile/i.test(name)) return "pctile";
     if (/\(%\)|yield level/i.test(name)) return "%";
     if (/bps/i.test(name)) return "bps";
     if (/z-score/i.test(name)) return "z";
@@ -288,6 +357,7 @@
     const unit = guessUnit(name);
     if (unit === "pp") return `${value >= 0 ? "+" : ""}${value.toFixed(2)} pp`;
     if (name === "DXY") return value.toFixed(2);
+    if (unit === "pctile") return `${Math.round(value)}th pct`;
     return fmt(value, unit);
   }
 
@@ -341,7 +411,8 @@
           <li>
             <span class="m-label">${esc(m.label)}</span>
             <span class="m-value${m.met ? " hit" : ""}">${esc(fmt(m.value, m.unit))}</span>
-            <span class="m-trigger">${m.trigger ? `Fires when ${esc(m.trigger)}` : "Context only"}</span>
+            <span class="m-trigger">${m.trigger ? `Fires when ${esc(m.trigger)}` : "Context only"}${m.as_of ? `<span class="m-date"> · official ${esc(dayLabel(m.as_of))}</span>` : ""}</span>
+            ${m.preliminary ? `<span class="m-prelim">Preliminary ${esc(dayLabel(m.preliminary.date))}: ${esc(fmt(m.preliminary.value, m.unit === "chg" ? "" : m.unit))} from ${esc(m.preliminary.source)}, not used until official</span>` : ""}
           </li>`).join("")}
         </ul>
       </article>`).join("");
@@ -386,6 +457,47 @@
     }).join("");
   }
 
+  function fmtInput(item) {
+    if (item.value === null || item.value === undefined) return "—";
+    if (["y10", "t3m", "effr"].includes(item.key)) return `${item.value.toFixed(2)}%`;
+    return item.value >= 1000 ? item.value.toLocaleString("en-US", { maximumFractionDigits: 2 }) : item.value.toFixed(2);
+  }
+
+  function renderInputs(quality) {
+    const items = (quality && quality.inputs) || [];
+    $("inputs").innerHTML = items.map((item) => {
+      const badge = item.stale ? "STALE" : item.status;
+      const text = item.stale ? "Stale" : STATUS_TEXT[item.status] || item.status;
+      const meta = [];
+      if (item.source) meta.push(`${item.source}${item.date ? `, ${dayLabel(item.date)}` : ""}`);
+      if (item.confirmed_by && item.confirmed_by.length) meta.push(`matches ${item.confirmed_by.join(" and ")}`);
+      if (!item.used_in_call) meta.push("telemetry only");
+      const notes = (item.notes || []).join("; ");
+      return `<div class="input">
+        <span class="i-name"><span class="badge ${esc(badge)}">${esc(text)}</span>${esc(item.label)}</span>
+        <span class="i-value">${esc(fmtInput(item))}</span>
+        <span class="i-meta">${esc(meta.join(" · "))}${notes ? `<br>${esc(notes)}` : ""}${item.preliminary ? `<br>Preliminary ${esc(dayLabel(item.preliminary.date))}: ${esc(item.preliminary.value.toFixed(2))} (${esc(item.preliminary.source)})` : ""}</span>
+      </div>`;
+    }).join("");
+  }
+
+  function renderQuality(status) {
+    const missed = missedRun(status.as_of);
+    if (missed) { $("missed").hidden = false; $("missed").textContent = missed; }
+    const q = status.data_quality;
+    if (!q) return;
+    const warns = (q.issues || []).filter((i) => i.severity === "warn");
+    if (q.status === "OK" && !warns.length) {
+      $("quality-ok").hidden = false;
+      $("quality-ok").textContent = q.summary;
+      return;
+    }
+    if (q.status === "STALE") return;  // the stale banner already explains it
+    $("quality").hidden = false;
+    $("quality").innerHTML = `<strong>${q.status === "OK" ? "Call inputs verified, with gaps elsewhere." : "Some inputs couldn't be verified."}</strong> ${esc(q.summary)}
+      <ul>${warns.map((i) => `<li>${esc(i.message)}</li>`).join("")}</ul>`;
+  }
+
   function renderHistory(status, history) {
     if (!history.length) return;
     $("history-section").hidden = false;
@@ -421,15 +533,14 @@
     $("summary").textContent = status.actionable_summary;
     $("since").textContent = phaseSince(status, history);
 
+    renderQuality(status);
     $("diagnosis").textContent = status.diagnosis || "No diagnosis in this snapshot.";
+    if (status.backdrop) { $("backdrop").hidden = false; $("backdrop").innerHTML = `<b>Backdrop:</b> ${esc(status.backdrop)}`; }
     renderDrivers(status.drivers || []);
     renderRules(status);
     renderSignals(status.telemetry);
+    renderInputs(status.data_quality);
     renderHistory(status, history);
-
-    const ok = status.sources.filter((s) => s.ok).length;
-    const down = status.sources.filter((s) => !s.ok).map((s) => s.symbol);
-    $("feeds").textContent = `${ok} of ${status.sources.length} data feeds answered${down.length ? `; down: ${down.join(", ")}` : ""}.`;
     $("notes").innerHTML = (status.notes || []).map((n) => `<li>${esc(n)}</li>`).join("");
     $("content").hidden = false;
   }

@@ -2,71 +2,105 @@
 
 ## What this repo is
 A rule-based diagnostic engine that classifies the macro-liquidity / semiconductor-cycle regime
-and serves it at `GET /api/v1/regime`. It is a **measurement tool, not a trading signal**.
-Every threshold is uncalibrated until a backtest says otherwise.
+and publishes it as a phone page (GitHub Pages). It is a **measurement tool, not a trading
+signal**. Every threshold is uncalibrated until a backtest says otherwise.
+
+## The data rule: verified or blank, same day
+Every number used in the call comes from its source of record **on the day it describes** and
+is checked against an independent copy. A number that fails a check is **withheld** (shown as
+unavailable, never guessed). See `app/verify.py`. FRED is not used: it only republishes these
+records a day later.
+
+| Input | Record (newest wins) | Confirming check | Veto-only check |
+|---|---|---|---|
+| 10Y | Cboe TNX (history + delayed quote; close final 15:00 ET) | Yahoo ^TNX ±0.02 | Treasury par 10Y ±0.10 |
+| 3M bill | Cboe IRX → bond-equivalent | Yahoo ^IRX ±0.03 | Treasury par 3M ±0.06 |
+| VIX | Cboe VIX (close final 16:15 ET) | Yahoo ^VIX ±1% | — |
+| EFFR | NY Fed (checked against its own target range) | — | — |
+| SOXX, IGV | Alpaca consolidated tape (SIP) | Yahoo ±0.3% | — |
+| DXY | ICE formula on EODHD live FX | Yahoo DX-Y.NYB ±0.25 | ECB-fix DXY ±1.0 |
+| KOSPI, Samsung | EODHD end-of-day (2–3h after close) → KRX Open API (next day) | Yahoo ±0.1% | — |
+
+Statuses: **VERIFIED** (a confirming source has the same date and agrees) · **OFFICIAL**
+(official record, not yet confirmed) · **UNCONFIRMED** (vendor record nothing confirmed →
+withheld) · **CONFLICT** (disagreement or bad print → withheld) · **MISSING**. A newer value
+from a confirming check is shown as `preliminary` and **never** used in the call. Veto-only
+checks differ in method or timing: they catch gross errors, they never confirm.
+
+## Last resort: Claude web search (`app/claude_fill.py`)
+Runs only when an input's record is MISSING/UNCONFIRMED or a session behind, AND Yahoo has a
+value for that exact date, AND that session is over, AND this month's spend is under
+`CLAUDE_MONTHLY_BUDGET_USD` (ledger: `claude_usage.json` on the snapshots release). One call per
+run covers every gap. CONFLICTs are never sent. Claude is never shown Yahoo's number. A filled
+value is used only if it is for the exact date, cites a URL from its own search results, and
+agrees with Yahoo within the confirming tolerance; it is then spliced onto the history and
+marked VERIFIED with the page named. Model: `claude-haiku-5-5` (falls back to
+`claude-sonnet-5-5` on a 400/404), `web_search_20250305`, max 5 searches. Never let Claude be
+the only source for a number, and never send it a conflict to break.
 
 ## Commands
 - Install: `pip install -e ".[dev]"`
-- Serve: `uvicorn app.main:app --reload --port 8000`
-- Test: `pytest -v` (coverage: `pytest --cov=app`)
-- Types: `python -m mypy app` (strict)
-- Lint/format: `ruff check . --fix` then `ruff format .`
+- Test: `pytest -q` · Types: `python -m mypy app` (strict) · Lint: `ruff check .` + `ruff format .`
+- One live read: `python -m app.snapshot --state state --site site` (needs the env vars below
+  for Alpaca and KRX; without them those inputs show as unavailable)
+- View: `python -m http.server 8000 -d site`
 
 ## Architecture (one direction of flow, pure core)
-`data.py` (httpx I/O) → `features.py` (series → named features) → `regime.py` (pure classifier)
-+ `drivers.py` ("why semis are moving") → `service.py` (builds the payload) → two front doors:
-- `snapshot.py`: the publish job. Writes `site/regime.json`, `site/history.json`, copies
-  `web/index.html`. This is what runs in production.
-- `main.py`: FastAPI (`/api/v1/regime`) for local use. Not deployed.
-`config.py` is the ONLY place thresholds live. `indicators.py` is pure math. `web/index.html`
-is a dumb renderer: all logic lives in Python and arrives in `regime.json`.
+`data.py` (httpx I/O, parsers) → `verify.py` (verified-or-blank) → `features.py` (named
+features) → `regime.py` (pure classifier) + `drivers.py` ("why semis are moving") →
+`service.py` (payload) → `snapshot.py` (publish job) / `main.py` (local FastAPI, not deployed).
+`alert.py` posts to Pheme. `config.py` is the ONLY place thresholds, sources and tolerances live.
+`web/index.html` is a dumb renderer: all logic is in Python and arrives in `regime.json`.
 
 ## Publishing (GitHub Pages, no server)
-- meridian-clock dispatches `regime-open.yml` (10:15 NY) and `regime-close.yml` (16:25 NY) on
-  weekdays. Both call `publish.yml`. Two files because the clock fires each file once per day.
-- Never add `schedule:` blocks to these workflows; the clock is the only scheduler.
-- State lives on the `snapshots` release (regime.json + history.json), never in git. A failed
-  download of an existing asset must stop the run.
-- If 10Y, VIX and SOXX are all down, the job republishes the previous read with `stale: true`.
-  History only grows on live reads (cap 750 rows).
+- meridian-clock dispatches `regime-morning.yml` (06:00 NY: finalizes the prior US session,
+  picks up the overnight Korea session) and `regime-close.yml` (16:25 NY: 16:00 closing auction,
+  16:15 VIX settle, plus the free SIP 15-minute rule). Both call `publish.yml`.
+- Never add `schedule:` blocks; the clock is the only scheduler.
+- State on the `snapshots` release: `regime.json`, `history.json`, `krx_cache.json`,
+  `claude_usage.json`. Never in
+  git. A failed download of an existing asset must stop the run.
+- Secrets: `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `ANTHROPIC_API_KEY`, `DISCORD_PHEME_WEBHOOK`;
+  optional `EODHD_API_KEY`, `KRX_API_KEY`. EODHD takes its key in the URL, so every error string passes through
+  `data.redact()` before it can be published. Never bypass it.
+- Pheme alerts when data quality is DEGRADED/STALE or no read was produced. Silent when clean.
+- The page detects a missed scheduled run by itself (schedule mirrored in `web/index.html`).
 
 ## Hard rules
 - Python 3.10+, full type hints, `mypy --strict` clean, `ruff` clean.
-- All external I/O via `httpx.AsyncClient`. No yfinance (blocking; mis-aligns US/KR calendars).
-- Never crash on a feed failure. A failed feed yields `FetchResult(series=None, error=...)`.
-  If 10Y, VIX and SOXX are all missing, serve the last SQLite snapshot with `stale: true`; with
-  no snapshot, return 503.
+- All external I/O via `httpx.AsyncClient` with `get_with_retry`. No yfinance.
+- Never crash on a source failure. Never substitute an unofficial value for an official one.
 - Missing data is **unknown, never false**. Rules use Kleene three-valued logic.
-- Math is written out explicitly. RSI is Wilder-smoothed (TradingView `ta.rsi`), never a plain
-  rolling mean.
-- Never change a threshold anywhere but `app/config.py`. Never invent a data source; an input
-  without a feed is marked `unsourced`.
+- A one-day move is explained only by things that moved that session. Levels go in `backdrop`.
+- Every displayed value carries its date. Dates are formatted without `%-d` (breaks on Windows).
+- RSI is Wilder-smoothed (TradingView `ta.rsi`), never a plain rolling mean.
 - Keep the original payload keys (`phase`, `risk_level`, `liquidity_squeeze`, `semi_rsi`,
-  `tnx_yield`, `actionable_summary`) — the dashboard depends on them.
+  `tnx_yield`, `actionable_summary`).
 
 ## Regime classification (precedence: 2 > 4 > 1 > 3, else Unclassified)
-- **Phase 2 — Liquidity Squeeze (ANY):** 10Y > 4.25% · z-score of today's 10Y change vs prior
-  60 sessions > +1.5 · VIX > 20. Risk HIGH. Overrides everything.
-- **Phase 4 — Rate Easing (ALL):** EFFR − 2Y > 0.10pp (proxy for "futures pricing cuts") ·
-  DXY < 102. Risk LOW.
+- **Phase 2 — Liquidity Squeeze (ANY):** 10Y above the 80th percentile of its past 250 sessions
+  · z-score of the latest 10Y change vs prior 60 > +1.5 · VIX > 20. Risk HIGH. (The spec's fixed
+  "10Y > 4.25%" fired every day once yields moved structurally above it.)
+- **Phase 4 — Rate Easing (ALL):** EFFR − 3M bill > 0.10pp (cuts-priced proxy; the 3M bill
+  replaced the 2Y because no same-day 2Y source exists, and its horizon is closer to fed funds
+  futures) · DXY < 102. Risk LOW.
 - **Phase 1 — Hardware Buildout (ALL):** SOXX RSI(14) > 55 · 10Y 5-session change < +5 bps.
-  Risk MODERATE.
-- **Phase 3 — Monetization (ALL):** IGV/SOXX SMA20 rising over 5 sessions · ratio still below
-  its 120-day mean · SaaS ARR growth > 15% (**unsourced** — evaluated without it, reported
-  `confidence: PARTIAL`). Risk LOW.
+- **Phase 3 — Monetization (ALL):** IGV/SOXX SMA20 rising over 5 sessions · ratio below its
+  120-day mean · SaaS ARR growth > 15% (**unsourced** → `confidence: PARTIAL`). Risk LOW.
 - **Unclassified:** nothing fires. Never default to a phase.
-- `confidence`: FULL · PARTIAL (unsourced leg skipped) · PROVISIONAL (a higher-precedence rule
-  was unknown due to missing data).
-
-## Telemetry (signals, not phase drivers)
-10Y > 4.25% or +10 bps/session → LIQUIDITY DRAIN · VIX > 20 → ALGORITHMIC RISK-OFF ·
-SOXX or Samsung RSI < 40 → HARDWARE DIGESTION · IGV/SOXX SMA20 rising → PHASE 3 TRANSITION ·
-KOSPI close > SMA200 → EM RE-RATE · DXY > 104.5 → FOREIGN REVENUE COMPRESSION.
-Semi-momentum label: >55 STRONG, <40 DIGESTION, otherwise CHOPPY.
 
 ## Known gaps (do not paper over)
-- Thresholds are from the original spec, not fitted. No backtest exists yet.
-- SaaS ARR growth has no free feed.
-- EFFR−2Y is a proxy for fed funds futures, not the futures curve itself.
-- DXY thresholds are ICE DXY scale; FRED's broad dollar index is a different scale — never
-  substitute it.
+- Thresholds are not fitted. No backtest exists yet. Correct data into an untested rule is
+  still an untested call.
+- SaaS ARR growth has no feed. EFFR − 3M bill is a proxy, not the futures curve. Bills can trade
+  away from EFFR on supply alone.
+- EFFR is published the next morning and changes only at FOMC decisions. On a decision day the
+  16:25 read still carries the pre-decision EFFR.
+- DXY is computed from FX quotes (EODHD free plan: 15-minute delay) with ICE's formula and must
+  agree with ICE's own value (Yahoo) to be used.
+- Korea at 06:00 depends on EODHD posting within ~3.5h of the 02:30 ET close; if it hasn't, the
+  prior session is used and the newer Yahoo value shows as preliminary.
+- EODHD is optional. Without it, Korea and the dollar index are filled by Claude every run
+  (history then comes from Yahoo, labelled unconfirmed) at roughly $0.02–0.05 per run on Haiku.
+- A Claude fill is a second independent source, not an official record. If Yahoo is also down,
+  the gap stays open.

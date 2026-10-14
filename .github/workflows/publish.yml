@@ -1,0 +1,91 @@
+# Run the regime engine once and publish the phone page to GitHub Pages.
+#
+# Called by regime-open.yml (10:15 NY) and regime-close.yml (16:25 NY), which meridian-clock
+# dispatches on weekdays. Two caller files exist because the clock fires each workflow file at
+# most once per NY day ("any run today means skip"). Can also be run by hand from Actions.
+#
+# State (the last regime.json and the rolling history.json) lives as assets on the "snapshots"
+# release of this repo, not in git, so publishing never creates commits on main.
+name: Publish regime (shared)
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # update the snapshots release assets
+  pages: write      # publish to GitHub Pages
+  id-token: write   # required by the Pages deployment
+
+env:
+  RELEASE: snapshots
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: python -m pip install -e .
+
+      - name: Restore previous snapshot and history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p state
+          if gh release view "$RELEASE" >/dev/null 2>&1; then
+            # The release exists, so a failed download must stop the run rather than
+            # publish over the stored history with an empty one.
+            assets=$(gh release view "$RELEASE" --json assets -q '.assets[].name')
+            for f in regime.json history.json; do
+              if grep -qx "$f" <<< "$assets"; then
+                gh release download "$RELEASE" --pattern "$f" --dir state --clobber
+              fi
+            done
+          else
+            echo "::warning::No '$RELEASE' release yet; starting fresh."
+            gh release create "$RELEASE" --title "Snapshots" \
+              --notes "Latest regime read and rolling history, updated by the publish workflow. Not a software release."
+          fi
+
+      - name: Run the engine
+        run: python -m app.snapshot --state state --site site
+
+      - name: Save snapshot and history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE" state/regime.json state/history.json --clobber
+
+      - name: Run summary
+        if: always()
+        run: |
+          {
+            echo "### Regime publish"
+            if [ -f site/regime.json ]; then
+              python -c "import json;d=json.load(open('site/regime.json'));print(f\"**{d['phase']}** · risk {d['risk_level']} · confidence {d['confidence']} · stale {d['stale']}\");print();print(d.get('diagnosis',''))"
+            else
+              echo "No snapshot written."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

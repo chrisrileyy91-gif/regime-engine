@@ -1,0 +1,19 @@
+# After-close read, 16:25 New York, dispatched by meridian-clock (schedule.json).
+# Do not add a `schedule:` block: the clock counts any run today as "already ran".
+name: Regime (close)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: regime-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    uses: ./.github/workflows/publish.yml

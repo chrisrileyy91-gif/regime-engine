@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Market Regime</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f2f4f7;
+    --surface: #ffffff;
+    --ink: #13202f;
+    --ink-2: #4a5768;
+    --ink-3: #7c8898;
+    --rule: #dde2e8;
+    --track: #e3e8ee;
+    --high: #c8382e;
+    --moderate: #b77a0f;
+    --low: #23826d;
+    --unknown: #7a8696;
+    --high-soft: #fbe9e7;
+    --moderate-soft: #fbf1df;
+    --low-soft: #e2f3ee;
+    --unknown-soft: #eceff3;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1724;
+      --surface: #142132;
+      --ink: #e8edf3;
+      --ink-2: #a9b5c4;
+      --ink-3: #74829a;
+      --rule: #22334a;
+      --track: #22334a;
+      --high: #f0675c;
+      --moderate: #e2a43a;
+      --low: #4cc0a3;
+      --unknown: #8d99ab;
+      --high-soft: #3a1d22;
+      --moderate-soft: #33291a;
+      --low-soft: #15332f;
+      --unknown-soft: #1c2a3c;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 16px/1.5 "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  main {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: max(20px, env(safe-area-inset-top)) 16px 40px;
+  }
+  h1, h2, h3, p { margin: 0; }
+  .masthead { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .masthead h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.01em; }
+  .masthead .updated { font-size: 13px; color: var(--ink-3); text-align: right; }
+
+  .stale {
+    margin-top: 14px; padding: 10px 12px; border-radius: 8px;
+    background: var(--moderate-soft); color: var(--ink); font-size: 14px;
+    border-left: 3px solid var(--moderate);
+  }
+
+  /* --- Hero: the cycle dial ------------------------------------------- */
+  .hero { display: grid; justify-items: center; text-align: center; padding: 22px 0 26px; }
+  .dial { width: 100%; max-width: 320px; height: auto; }
+  .dial .seg { fill: none; stroke: var(--track); stroke-width: 14; stroke-linecap: butt; }
+  .dial .seg.on { stroke: var(--accent); }
+  .dial .seg-label { fill: var(--ink-3); font-size: 12px; font-weight: 500; }
+  .dial .seg-num { fill: var(--ink-3); font-size: 12px; font-weight: 700; }
+  .dial .seg-num.on { fill: var(--accent); }
+  .dial .seg-label.on { fill: var(--ink); font-weight: 700; }
+  .dial .core-num { fill: var(--accent); font-size: 64px; font-weight: 700; }
+  .dial .core-sub { fill: var(--ink-3); font-size: 11px; font-weight: 500; }
+  .phase-name { margin-top: 10px; font-size: 24px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; max-width: 22ch; }
+  .phase-meta { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
+    background: var(--unknown-soft); color: var(--ink-2);
+  }
+  .pill.risk { background: var(--accent-soft); color: var(--accent); }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .summary { margin-top: 12px; color: var(--ink-2); font-size: 15px; max-width: 40ch; }
+  .since { margin-top: 6px; color: var(--ink-3); font-size: 13px; }
+
+  section { margin-top: 30px; }
+  section > h2 { font-size: 17px; font-weight: 700; letter-spacing: -0.005em; }
+  section > .lede { margin-top: 4px; font-size: 14px; color: var(--ink-3); }
+
+  /* --- Why semis are moving ------------------------------------------- */
+  .diagnosis {
+    margin-top: 12px; font-size: 17px; line-height: 1.45; font-weight: 500;
+    padding-left: 14px; border-left: 3px solid var(--accent);
+  }
+  .drivers { margin-top: 16px; display: grid; gap: 10px; }
+  .driver { background: var(--surface); border-radius: 12px; padding: 14px 14px 12px; }
+  .driver-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .driver-name { font-weight: 600; font-size: 16px; }
+  .driver-asks { font-size: 13.5px; color: var(--ink-3); margin-top: 2px; }
+  .state { font-size: 12.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+  .state.ACTIVE { background: var(--high-soft); color: var(--high); }
+  .state.QUIET { background: var(--low-soft); color: var(--low); }
+  .state.UNKNOWN { background: var(--unknown-soft); color: var(--unknown); }
+  .metrics { margin: 10px 0 0; padding: 0; list-style: none; }
+  .metrics li {
+    display: grid; grid-template-columns: 1fr auto; column-gap: 12px;
+    padding: 7px 0; border-top: 1px solid var(--rule); font-size: 14px;
+  }
+  .metrics .m-label { color: var(--ink-2); }
+  .metrics .m-value { font-weight: 600; text-align: right; }
+  .metrics .m-value.hit { color: var(--high); }
+  .metrics .m-trigger { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink-3); }
+
+  /* --- Phase rules ---------------------------------------------------- */
+  .rules { margin-top: 12px; display: grid; gap: 8px; }
+  details.rule { background: var(--surface); border-radius: 12px; }
+  details.rule > summary {
+    list-style: none; cursor: pointer; padding: 13px 14px;
+    display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
+  }
+  details.rule > summary::-webkit-details-marker { display: none; }
+  .rule-num {
+    width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 13px; font-weight: 700; background: var(--unknown-soft); color: var(--ink-2);
+  }
+  .rule.fired .rule-num { background: var(--accent); color: var(--surface); }
+  .rule-title { font-weight: 600; font-size: 15px; line-height: 1.3; }
+  .rule-logic { font-size: 12.5px; color: var(--ink-3); font-weight: 500; }
+  .verdict { font-size: 12.5px; font-weight: 700; color: var(--ink-3); }
+  .rule.fired .verdict { color: var(--accent); }
+  .conds { list-style: none; margin: 0; padding: 0 14px 10px; }
+  .conds li { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; padding: 8px 0; border-top: 1px solid var(--rule); font-size: 14px; }
+  .mark { font-weight: 700; text-align: center; }
+  .mark.yes { color: var(--low); }
+  .mark.no { color: var(--ink-3); }
+  .mark.unk { color: var(--moderate); }
+  .c-name { color: var(--ink); }
+  .c-threshold { display: block; font-size: 12.5px; color: var(--ink-3); }
+  .c-value { font-weight: 600; text-align: right; }
+  .c-note { display: block; font-size: 12.5px; color: var(--moderate); }
+  details.rule > summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 12px; }
+
+  /* --- Telemetry ------------------------------------------------------ */
+  .signals { margin-top: 12px; background: var(--surface); border-radius: 12px; padding: 2px 14px; }
+  .signal { display: grid; grid-template-columns: 10px 1fr auto; gap: 10px; align-items: baseline; padding: 11px 0; border-top: 1px solid var(--rule); }
+  .signal:first-child { border-top: 0; }
+  .signal .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--track); transform: translateY(-1px); }
+  .signal.on .dot { background: var(--high); }
+  .signal.unk .dot { background: transparent; border: 1.5px solid var(--unknown); }
+  .s-name { font-size: 14.5px; font-weight: 500; }
+  .s-sub { display: block; font-size: 12.5px; color: var(--ink-3); }
+  .s-sub b { font-weight: 600; color: var(--high); }
+  .signal.good .dot { background: var(--low); }
+  .signal.good .s-sub b { color: var(--low); }
+  .s-value { font-weight: 600; font-size: 14.5px; text-align: right; }
+
+  /* --- History -------------------------------------------------------- */
+  .strip { margin-top: 12px; display: grid; grid-template-columns: repeat(30, 1fr); gap: 3px; }
+  .strip span { height: 28px; border-radius: 3px; background: var(--track); }
+  .strip span.p1 { background: var(--moderate); }
+  .strip span.p2 { background: var(--high); }
+  .strip span.p3, .strip span.p4 { background: var(--low); }
+  .strip span.p0 { background: var(--unknown); opacity: 0.45; }
+  .strip-axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-3); margin-top: 6px; }
+  .changes { margin: 12px 0 0; padding: 0; list-style: none; font-size: 14px; }
+  .changes li { padding: 7px 0; border-top: 1px solid var(--rule); display: flex; justify-content: space-between; gap: 12px; }
+  .changes .when { color: var(--ink-3); white-space: nowrap; }
+
+  footer { margin-top: 34px; font-size: 13px; color: var(--ink-3); display: grid; gap: 8px; }
+  footer ul { margin: 0; padding-left: 18px; }
+  .error { margin-top: 40px; padding: 16px; background: var(--surface); border-radius: 12px; }
+  .error h2 { font-size: 17px; }
+  .error p { margin-top: 6px; color: var(--ink-2); font-size: 15px; }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: no-preference) {
+    .dial .seg.on { animation: draw 700ms ease-out both; }
+    @keyframes draw { from { stroke-dashoffset: var(--len); } to { stroke-dashoffset: 0; } }
+  }
+</style>
+</head>
+<body>
+<main id="app" aria-live="polite">
+  <header class="masthead">
+    <h1>Market regime</h1>
+    <p class="updated" id="updated">Loading…</p>
+  </header>
+  <div class="stale" id="stale" hidden></div>
+
+  <div id="content" hidden>
+    <div class="hero">
+      <svg class="dial" id="dial" viewBox="0 0 320 236" role="img"></svg>
+      <h2 class="phase-name" id="phase-name"></h2>
+      <div class="phase-meta" id="phase-meta"></div>
+      <p class="summary" id="summary"></p>
+      <p class="since" id="since"></p>
+    </div>
+
+    <section>
+      <h2>Why semis are moving</h2>
+      <p class="diagnosis" id="diagnosis"></p>
+      <div class="drivers" id="drivers"></div>
+    </section>
+
+    <section>
+      <h2>Phase rules</h2>
+      <p class="lede">Checked in order 2, 4, 1, 3. The first rule that passes sets the phase.</p>
+      <div class="rules" id="rules"></div>
+    </section>
+
+    <section>
+      <h2>Signals</h2>
+      <div class="signals" id="signals"></div>
+    </section>
+
+    <section id="history-section" hidden>
+      <h2>Recent reads</h2>
+      <div class="strip" id="strip" aria-hidden="true"></div>
+      <div class="strip-axis"><span id="strip-start"></span><span>latest</span></div>
+      <ul class="changes" id="changes"></ul>
+    </section>
+
+    <footer>
+      <p id="feeds"></p>
+      <ul id="notes"></ul>
+      <p>Rule-based read of public market data. Thresholds come from the original spec and are not yet backtested. Not a trading signal.</p>
+    </footer>
+  </div>
+
+  <div class="error" id="error" hidden>
+    <h2>The latest read didn't load</h2>
+    <p id="error-text"></p>
+  </div>
+</main>
+
+<script>
+(() => {
+  const RISK = {
+    HIGH: ["var(--high)", "var(--high-soft)"],
+    MODERATE: ["var(--moderate)", "var(--moderate-soft)"],
+    LOW: ["var(--low)", "var(--low-soft)"],
+    UNDETERMINED: ["var(--unknown)", "var(--unknown-soft)"],
+  };
+  const SHORT = { 1: "Buildout", 2: "Squeeze", 3: "Monetization", 4: "Easing" };
+  const CONFIDENCE = {
+    FULL: "All inputs present",
+    PARTIAL: "Partial evidence",
+    PROVISIONAL: "Provisional, data missing",
+  };
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const nyTime = (iso, opts) => new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", ...opts });
+
+  function fmt(value, unit) {
+    if (value === null || value === undefined) return "n/a";
+    if (typeof value === "boolean") return value ? "yes" : "no";
+    switch (unit) {
+      case "%": return `${value.toFixed(2)}%`;
+      case "chg": return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+      case "bps": return `${value >= 0 ? "+" : ""}${value.toFixed(1)} bps`;
+      case "z": return `${value >= 0 ? "+" : ""}${value.toFixed(2)}σ`;
+      default: return value.toFixed(1);
+    }
+  }
+
+  function guessUnit(name) {
+    if (/\(%\)|yield level/i.test(name)) return "%";
+    if (/bps/i.test(name)) return "bps";
+    if (/z-score/i.test(name)) return "z";
+    if (/\(pp\)/i.test(name)) return "pp";
+    return "";
+  }
+
+  function fmtCondition(value, name) {
+    if (value === null || value === undefined) return "n/a";
+    if (typeof value === "boolean") return value ? "yes" : "no";
+    const unit = guessUnit(name);
+    if (unit === "pp") return `${value >= 0 ? "+" : ""}${value.toFixed(2)} pp`;
+    if (name === "DXY") return value.toFixed(2);
+    return fmt(value, unit);
+  }
+
+  function drawDial(status) {
+    // Four arcs = the four-phase cycle, clockwise from 12 o'clock. Labels sit outside the ring.
+    const svg = $("dial");
+    const cx = 160, cy = 118, r = 84, gapDeg = 6, labelR = r + 24;
+    const polar = (deg, rad) => {
+      const a = (deg - 90) * Math.PI / 180;
+      return [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
+    };
+    let out = "";
+    for (let i = 0; i < 4; i++) {
+      const phase = i + 1;
+      const start = i * 90 + gapDeg / 2, end = (i + 1) * 90 - gapDeg / 2;
+      const [x1, y1] = polar(start, r), [x2, y2] = polar(end, r);
+      const on = status.phase_id === phase;
+      const len = (Math.PI * 2 * r) * ((end - start) / 360);
+      out += `<path class="seg${on ? " on" : ""}" d="M${x1.toFixed(2)} ${y1.toFixed(2)} A${r} ${r} 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)}" style="stroke-dasharray:${len};--len:${len}"/>`;
+      const mid = (start + end) / 2;
+      const [tx, ty] = polar(mid, labelR);
+      const anchor = tx > cx ? "start" : "end";
+      out += `<text x="${tx.toFixed(1)}" y="${(ty - 8).toFixed(1)}" text-anchor="${anchor}" class="seg-num${on ? " on" : ""}">${phase}</text>`;
+      out += `<text x="${tx.toFixed(1)}" y="${(ty + 8).toFixed(1)}" text-anchor="${anchor}" class="seg-label${on ? " on" : ""}">${SHORT[phase]}</text>`;
+    }
+    const core = status.phase_id === 0 ? "–" : String(status.phase_id);
+    out += `<text class="core-num" x="${cx}" y="${cy - 2}" text-anchor="middle" dominant-baseline="middle">${core}</text>`;
+    out += `<text class="core-sub" x="${cx}" y="${cy + 36}" text-anchor="middle">${status.phase_id === 0 ? "no phase" : "phase"}</text>`;
+    svg.innerHTML = out;
+    svg.setAttribute("aria-label", `Current phase: ${status.phase}`);
+  }
+
+  function phaseSince(status, history) {
+    if (!history.length) return "";
+    let i = history.length - 1;
+    if (history[i].phase_id !== status.phase_id) return "";
+    while (i > 0 && history[i - 1].phase_id === status.phase_id) i--;
+    const reads = history.length - i;
+    const start = nyTime(history[i].as_of, { month: "short", day: "numeric" });
+    return reads > 1 ? `Same call since ${start}, ${reads} reads in a row` : "New call as of this read";
+  }
+
+  function renderDrivers(drivers) {
+    $("drivers").innerHTML = drivers.map((d) => `
+      <article class="driver">
+        <div class="driver-head">
+          <div><h3 class="driver-name">${esc(d.name)}</h3><p class="driver-asks">${esc(d.asks)}</p></div>
+          <span class="state ${esc(d.state)}">${d.state === "ACTIVE" ? "Active" : d.state === "QUIET" ? "Quiet" : "No data"}</span>
+        </div>
+        <ul class="metrics">${d.metrics.map((m) => `
+          <li>
+            <span class="m-label">${esc(m.label)}</span>
+            <span class="m-value${m.met ? " hit" : ""}">${esc(fmt(m.value, m.unit))}</span>
+            <span class="m-trigger">${m.trigger ? `Fires when ${esc(m.trigger)}` : "Context only"}</span>
+          </li>`).join("")}
+        </ul>
+      </article>`).join("");
+  }
+
+  function renderRules(status) {
+    $("rules").innerHTML = status.rules.map((r) => {
+      const fired = r.fired === true;
+      const winner = r.phase_id === status.phase_id;
+      const verdict = r.fired === true ? (winner ? "Passes, sets phase" : "Passes") : r.fired === false ? "Fails" : "Can't tell";
+      const conds = r.conditions.map((c) => {
+        const mark = c.unsourced ? ["unk", "–"] : c.met === true ? ["yes", "✓"] : c.met === false ? ["no", "✕"] : ["unk", "?"];
+        return `<li>
+          <span class="mark ${mark[0]}" aria-label="${mark[0]}">${mark[1]}</span>
+          <span><span class="c-name">${esc(c.name)}</span><span class="c-threshold">needs ${esc(c.threshold)}</span>
+            ${c.unsourced ? `<span class="c-note">No data feed exists; skipped</span>` : ""}</span>
+          <span class="c-value">${esc(fmtCondition(c.value, c.name))}</span>
+        </li>`;
+      }).join("");
+      const title = r.phase.replace(/^Phase \d: /, "");
+      return `<details class="rule${fired && winner ? " fired" : ""}"${winner ? " open" : ""}>
+        <summary>
+          <span class="rule-num">${r.phase_id}</span>
+          <span><span class="rule-title">${esc(title)}</span><br><span class="rule-logic">${r.logic === "ANY" ? "Any one condition" : "All conditions"}</span></span>
+          <span class="verdict">${verdict}</span>
+        </summary>
+        <ul class="conds">${conds}</ul>
+      </details>`;
+    }).join("");
+  }
+
+  function renderSignals(telemetry) {
+    $("signals").innerHTML = telemetry.map((s) => {
+      const cls = s.triggered === true ? `on ${s.tone === "constructive" ? "good" : ""}` : s.triggered === null ? "unk" : "";
+      const value = s.value === null ? "n/a" : s.indicator.startsWith("10Y") ? `${s.value.toFixed(2)}%` : s.value >= 1000 ? Math.round(s.value).toLocaleString("en-US") : s.value.toFixed(s.value < 10 ? 3 : 1);
+      return `<div class="signal ${cls}">
+        <span class="dot" aria-hidden="true"></span>
+        <span><span class="s-name">${esc(s.indicator)}</span>
+          <span class="s-sub">${s.triggered === true ? `<b>${esc(s.signal.toLowerCase())}</b>, ` : ""}fires when ${esc(s.trigger)}</span></span>
+        <span class="s-value">${esc(value)}</span>
+      </div>`;
+    }).join("");
+  }
+
+  function renderHistory(status, history) {
+    if (!history.length) return;
+    $("history-section").hidden = false;
+    const recent = history.slice(-30);
+    const pad = 30 - recent.length;
+    $("strip").innerHTML = "<span></span>".repeat(pad) + recent.map((h) => `<span class="p${h.phase_id}" title="${esc(h.phase)}"></span>`).join("");
+    $("strip-start").textContent = nyTime(recent[0].as_of, { month: "short", day: "numeric" });
+    const changes = [];
+    for (let i = history.length - 1; i > 0 && changes.length < 5; i--) {
+      if (history[i].phase_id !== history[i - 1].phase_id) changes.push(history[i]);
+    }
+    $("changes").innerHTML = changes.length
+      ? changes.map((h) => `<li><span>${esc(h.phase)}</span><span class="when">${nyTime(h.as_of, { month: "short", day: "numeric" })}</span></li>`).join("")
+      : `<li><span>No phase change in the stored history yet.</span></li>`;
+  }
+
+  function render(status, history) {
+    const [accent, soft] = RISK[status.risk_level] || RISK.UNDETERMINED;
+    document.documentElement.style.setProperty("--accent", accent);
+    document.documentElement.style.setProperty("--accent-soft", soft);
+
+    const when = nyTime(status.as_of, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    $("updated").textContent = `${when} ET`;
+    if (status.stale) {
+      $("stale").hidden = false;
+      $("stale").textContent = status.stale_reason || "Live data was unavailable; showing the last good read.";
+    }
+
+    drawDial(status);
+    $("phase-name").textContent = status.phase.replace(/^Phase \d: /, "");
+    const riskLabel = status.risk_level === "UNDETERMINED" ? "Risk undetermined" : `${status.risk_level[0]}${status.risk_level.slice(1).toLowerCase()} risk`;
+    $("phase-meta").innerHTML = `<span class="pill risk"><span class="dot"></span>${esc(riskLabel)}</span><span class="pill">${esc(CONFIDENCE[status.confidence] || status.confidence)}</span>`;
+    $("summary").textContent = status.actionable_summary;
+    $("since").textContent = phaseSince(status, history);
+
+    $("diagnosis").textContent = status.diagnosis || "No diagnosis in this snapshot.";
+    renderDrivers(status.drivers || []);
+    renderRules(status);
+    renderSignals(status.telemetry);
+    renderHistory(status, history);
+
+    const ok = status.sources.filter((s) => s.ok).length;
+    const down = status.sources.filter((s) => !s.ok).map((s) => s.symbol);
+    $("feeds").textContent = `${ok} of ${status.sources.length} data feeds answered${down.length ? `; down: ${down.join(", ")}` : ""}.`;
+    $("notes").innerHTML = (status.notes || []).map((n) => `<li>${esc(n)}</li>`).join("");
+    $("content").hidden = false;
+  }
+
+  async function load() {
+    const bust = `?t=${Date.now()}`;
+    try {
+      const res = await fetch(`regime.json${bust}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`regime.json returned HTTP ${res.status}`);
+      const status = await res.json();
+      let history = [];
+      try {
+        const h = await fetch(`history.json${bust}`, { cache: "no-store" });
+        if (h.ok) history = await h.json();
+      } catch (_) { /* history is optional */ }
+      render(status, Array.isArray(history) ? history : []);
+    } catch (err) {
+      $("updated").textContent = "";
+      $("error").hidden = false;
+      $("error-text").textContent = `${err.message}. If this is a new deploy, run the publish workflow once from the repo's Actions tab.`;
+    }
+  }
+  load();
+})();
+</script>
+</body>
+</html>

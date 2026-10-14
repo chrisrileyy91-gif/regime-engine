@@ -77,6 +77,7 @@ YAHOO_HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")
 SECRET_ENV_VARS = ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "KRX_API_KEY", "EODHD_API_KEY", "ANTHROPIC_API_KEY")
 
 # Cboe index scaling and the earliest New York time a quote counts as that day's close.
+# Yahoo's ^TNX and ^VIX are copies of these Cboe indexes: they confirm our parse, not the method.
 CBOE_INDEXES: dict[str, tuple[str, float, str]] = {
     "y10@cboe": ("TNX", 10.0, "14:55"),  # 10-year yield x10; bond session ends 15:00
     "t3m@cboe": ("IRX", 10.0, "14:55"),  # 13-week bill discount rate x10
@@ -112,10 +113,14 @@ INPUTS: dict[str, InputSpec] = {
         True,
         5,
     ),
+    # Treasury is the record: Cboe ^IRX ran 7-10 bp under Treasury's 3M on every day of the first
+    # live run, so it is a different instrument/basis and only serves as a gross-error veto.
+    # Yahoo ^IRX is a copy of Cboe's index, so it was dropped. Treasury posts the curve in the
+    # evening: the 16:25 read uses the prior session, the 06:00 read the latest.
     "t3m": InputSpec(
         "3-month T-bill yield",
-        ("t3m@cboe",),
-        (("t3m@yahoo", 0.03, "abs", True), ("t3m@treasury", 0.06, "abs", False)),
+        ("t3m@treasury",),
+        (("t3m@cboe", 0.15, "abs", False),),
         True,
         5,
     ),
@@ -137,10 +142,10 @@ INPUTS: dict[str, InputSpec] = {
 }
 RECORD_MATCH_TOLERANCE = {"kospi": 0.05, "samsung": 1.0}  # EODHD vs KRX copies of the same close
 CHECK_OVERLAP_SESSIONS = 5  # recent common dates compared between sources
+SYSTEMATIC_MIN_DAYS = 3  # a check that disagrees on this many compared dates withholds, confirmed or not
 
 YAHOO_SYMBOLS: dict[str, str] = {
     "y10@yahoo": "^TNX",
-    "t3m@yahoo": "^IRX",
     "vix@yahoo": "^VIX",
     "soxx@yahoo": "SOXX",
     "igv@yahoo": "IGV",
@@ -202,3 +207,4 @@ GAP_QUESTIONS: dict[str, tuple[str, str]] = {
     "samsung": ("Samsung Electronics (005930) official closing price on the Korea Exchange, in KRW", "kr"),
 }
 US_SESSION_DONE_NY = "16:20"  # a US close for today is only requested after this time
+KR_SESSION_DONE_NY = "03:00"  # KRX closes 15:30 KST = 02:30 EDT / 01:30 EST

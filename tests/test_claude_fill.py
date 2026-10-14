@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import httpx
+import pandas as pd
 import pytest
 import respx
 
@@ -86,12 +87,40 @@ def test_no_gap_without_a_confirming_value() -> None:
     assert find_gaps(verify_all(results, TODAY.date()), results, after_close()) == []
 
 
-def test_us_close_not_requested_before_session_end() -> None:
+def test_unfinished_session_falls_back_to_last_completed_one() -> None:
     results = market()
     results["soxx@alpaca"] = failed("soxx@alpaca")
     morning = datetime(TODAY.year, TODAY.month, TODAY.day, 10, 0, tzinfo=NY)
-    assert find_gaps(verify_all(results, TODAY.date()), results, morning) == []
-    assert [g.key for g in find_gaps(verify_all(results, TODAY.date()), results, after_close())] == ["soxx"]
+    previous = str(results["soxx@yahoo"].series.index[-2].date())  # today's US session isn't over
+    assert [(g.key, g.date) for g in find_gaps(verify_all(results, TODAY.date()), results, morning)] == [
+        ("soxx", previous)
+    ]
+    assert [(g.key, g.date) for g in find_gaps(verify_all(results, TODAY.date()), results, after_close())] == [
+        ("soxx", TODAY_STR)
+    ]
+
+
+def test_in_progress_korean_session_falls_back_to_the_last_close() -> None:
+    """Live run at 21:12 ET: Yahoo's newest KOSPI bar was the next day's session, still trading."""
+    results = korea_missing()
+    yahoo = results["kospi@yahoo"].series
+    tomorrow = TODAY + pd.Timedelta(days=1)
+    results["kospi@yahoo"] = ok("kospi@yahoo", pd.concat([yahoo, pd.Series([yahoo.iloc[-1]], index=[tomorrow])]))
+    night = datetime(TODAY.year, TODAY.month, TODAY.day, 21, 12, tzinfo=NY)
+    gaps = find_gaps(verify_all(results, TODAY.date()), results, night)
+    assert [(g.key, g.date) for g in gaps] == [("kospi", TODAY_STR)]
+
+
+@respx.mock
+async def test_fill_that_fails_a_veto_check_is_dropped(api_key: None) -> None:
+    results = market()
+    results["dxy@eodhd"] = failed("dxy@eodhd", "not configured")
+    yahoo = float(results["dxy@yahoo"].series.iloc[-1])
+    results["dxy@ecb"] = ok("dxy@ecb", results["dxy@ecb"].series + 5.0)  # ECB-fix DXY 5 points away
+    answer = f'[{{"id": "dxy", "date": "{TODAY_STR}", "value": {yahoo}, "source_url": "https://www.reuters.com/markets/kospi"}}]'
+    respx.post(ANTHROPIC_URL).mock(return_value=httpx.Response(200, json=claude_payload(answer)))
+    report = await run_fill(results)
+    assert report.fills == {} and any("fails the ECB reference rates check" in n for n in report.notes)
 
 
 def test_prompt_never_reveals_the_check_value() -> None:

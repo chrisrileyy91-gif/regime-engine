@@ -14,7 +14,7 @@ records a day later.
 | Input | Record (newest wins) | Confirming check | Veto-only check |
 |---|---|---|---|
 | 10Y | Cboe TNX (history + delayed quote; close final 15:00 ET) | Yahoo ^TNX ±0.02 | Treasury par 10Y ±0.10 |
-| 3M bill | Cboe IRX → bond-equivalent | Yahoo ^IRX ±0.03 | Treasury par 3M ±0.06 |
+| 3M bill | U.S. Treasury par 3M (posts in the evening) | — | Cboe IRX → bond-equivalent ±0.15 |
 | VIX | Cboe VIX (close final 16:15 ET) | Yahoo ^VIX ±1% | — |
 | EFFR | NY Fed (checked against its own target range) | — | — |
 | SOXX, IGV | Alpaca consolidated tape (SIP) | Yahoo ±0.3% | — |
@@ -25,7 +25,10 @@ Statuses: **VERIFIED** (a confirming source has the same date and agrees) · **O
 (official record, not yet confirmed) · **UNCONFIRMED** (vendor record nothing confirmed →
 withheld) · **CONFLICT** (disagreement or bad print → withheld) · **MISSING**. A newer value
 from a confirming check is shown as `preliminary` and **never** used in the call. Veto-only
-checks differ in method or timing: they catch gross errors, they never confirm.
+checks differ in method or timing: they catch gross errors, they never confirm. A check that
+disagrees on 3+ of the last 5 compared dates is **systematic** and withholds the value even if a
+confirming copy agrees: Yahoo's ^TNX/^VIX are copies of Cboe's indexes, so they confirm our parse,
+not the methodology (first live run: Cboe ^IRX sat 7–10 bp under Treasury all week).
 
 ## Last resort: Claude web search (`app/claude_fill.py`)
 Runs only when an input's record is MISSING/UNCONFIRMED or a session behind, AND Yahoo has a

@@ -61,5 +61,6 @@ pass/fail/unknown (`rules`), the 7-row telemetry table, raw `inputs`, per-feed `
 | 11 | Fixed "10Y > 4.25%" Phase 2 leg | Fired every day once yields sat above it (first live read: 5.22%, falling, VIX 15) | 10Y above the 80th percentile of its past year |
 | 12 | Diagnosis blamed the 10Y level for a one-day drop | A level can't explain a single session | Same-session moves only; levels go in `backdrop` |
 | 14 | Treasury curve and FRED as the yield source | Treasury hadn't posted Oct 13 by 20:40; FRED lags a day | Cboe's same-day official TNX/IRX/VIX closes; Treasury kept as a veto-only check |
+| 15 | Cboe ^IRX as the 3M bill record | Ran 7–10 bp under Treasury every day; Yahoo's "confirmation" was a copy of the same index | Treasury is the record; persistent disagreement now withholds even when a copy agrees |
 | 13 | Yahoo as the only source | Unofficial; first read had ETF bars a session late | Official sources first, verified-or-blank, Pheme alerts, missed-run banner |
 | 10 | Gemini dashboard: composite scores, "Action: NEUTRAL HEDGE", ARR slider | Undefined formulas; ARR has no feed; showed VIX 21 as "stable" | Dropped. Every number on the page traces to a feed and a rule |

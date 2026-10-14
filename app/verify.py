@@ -29,6 +29,7 @@ from app.config import (
     OFFICIAL_SOURCES,
     RECORD_MATCH_TOLERANCE,
     SANITY_BOUNDS,
+    SYSTEMATIC_MIN_DAYS,
     InputSpec,
 )
 from app.data import FetchResult
@@ -150,16 +151,26 @@ def verify_input(key: str, spec: InputSpec, results: dict[str, FetchResult], tod
             notes.append(f"history matches {other_name}; {other_name} hasn't posted {day} yet")
 
     disagreements: list[str] = []
+    systematic: list[str] = []
     for check, tolerance, kind, confirms in checks:
         assert check.series is not None
         name = SOURCE_NAMES[check.source]
         bad = _mismatches(series, check.series, tolerance, kind)
-        if bad:
+        compared = len(series.index.intersection(check.series.index)[-CHECK_OVERLAP_SESSIONS:])
+        if bad and compared >= SYSTEMATIC_MIN_DAYS and len(bad) >= SYSTEMATIC_MIN_DAYS:
+            systematic.append(f"{name} on {len(bad)} of {compared} recent dates ({'; '.join(bad)})")
+        elif bad:
             disagreements.append(f"{name} ({'; '.join(bad)})")
         elif confirms and latest_day in check.series.index:
             confirmed.append(name)
-        elif not confirms and len(series.index.intersection(check.series.index)):
+        elif not confirms and compared:
             notes.append(f"consistent with {name}")
+    if systematic:
+        # A disagreement that repeats day after day is a wrong source or a wrong assumption, not
+        # noise. A confirming copy of the same number can't overrule it (first live run: Cboe ^IRX
+        # sat 7-10 bp under Treasury for five days while Yahoo, a copy of ^IRX, "confirmed" it).
+        reason = f"{source} disagrees systematically with " + ", ".join(systematic)
+        return make("CONFLICT", [reason], day=day, source=source, preliminary=newest_check())
     if disagreements and not confirmed:
         reason = f"{source} disagrees with " + ", ".join(disagreements)
         return make("CONFLICT", [reason], day=day, source=source, preliminary=newest_check())

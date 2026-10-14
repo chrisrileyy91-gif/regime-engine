@@ -17,7 +17,8 @@ def check(results: dict, key: str):  # type: ignore[no-untyped-def]
 def test_everything_agrees(calm_market: dict) -> None:
     verified = verify_all(calm_market, TODAY_DATE)
     statuses = {k: v.status.status for k, v in verified.items()}
-    assert statuses == {**dict.fromkeys(INPUTS, "VERIFIED"), "effr": "OFFICIAL"}  # EFFR has no second copy
+    # EFFR has no second copy; the 3M bill's only other source (Cboe ^IRX) is a different basis.
+    assert statuses == {**dict.fromkeys(INPUTS, "VERIFIED"), "effr": "OFFICIAL", "t3m": "OFFICIAL"}
     quality = assess(verified)
     assert quality.status == "OK" and not [i for i in quality.issues if i.severity == "warn"]
 
@@ -44,12 +45,31 @@ def test_methodology_check_cannot_confirm() -> None:
     assert v.status.status == "OFFICIAL" and v.status.confirmed_by == []
 
 
-def test_methodology_disagreement_noted_when_same_instrument_confirms() -> None:
+def test_one_day_methodology_disagreement_is_noted_when_a_copy_confirms() -> None:
     results = market()
-    results["y10@treasury"] = ok("y10@treasury", results["y10@treasury"].series + 0.30)  # type: ignore[operator]
+    treasury = results["y10@treasury"].series.copy()  # type: ignore[union-attr]
+    treasury.iloc[-2] += 0.30  # one odd day
+    results["y10@treasury"] = ok("y10@treasury", treasury)
     v = check(results, "y10")
     assert v.status.status == "VERIFIED"
     assert any("differs, but Yahoo confirms" in n for n in v.status.notes)
+
+
+def test_systematic_disagreement_withholds_even_when_a_copy_confirms() -> None:
+    """First live run: Cboe ^IRX sat 7-10 bp under Treasury every day; Yahoo (a copy) agreed."""
+    results = market()
+    results["y10@treasury"] = ok("y10@treasury", results["y10@treasury"].series + 0.30)  # type: ignore[operator]
+    v = check(results, "y10")
+    assert v.status.status == "CONFLICT" and v.series is None
+    assert "systematically" in v.status.notes[0]
+
+
+def test_3m_bill_record_is_treasury_with_cboe_as_veto_only() -> None:
+    results = market()
+    results["t3m@cboe"] = ok("t3m@cboe", results["t3m@cboe"].series - 0.09)  # type: ignore[operator]
+    v = check(results, "t3m")
+    assert v.status.status == "OFFICIAL" and v.status.source == "U.S. Treasury"
+    assert any("consistent with Cboe" in n for n in v.status.notes)
 
 
 def test_disagreement_with_nothing_confirming_is_conflict() -> None:

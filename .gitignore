@@ -9,3 +9,5 @@ __pycache__/
 data/
 state/
 site/
+# local Claude Code hand-off notes; the repo is public
+UPDATE_PROMPT.md

@@ -334,8 +334,6 @@ async def fetch_yahoo(client: httpx.AsyncClient, key: str, symbol: str) -> Fetch
             series, appended = parse_yahoo_chart(response.json())
             if key == "y10@yahoo" and float(series.median()) > 25.0:
                 series = series / 10.0  # older ^TNX convention: yield x10
-            if key == "t3m@yahoo":
-                series = series.map(bill_bond_equivalent)  # ^IRX is a discount rate
             details = ["live quote appended"] if appended else []
             if number > 1:
                 details.append(f"backup host {host}")

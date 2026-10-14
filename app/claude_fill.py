@@ -44,6 +44,7 @@ from app.config import (
     CLAUDE_TIMEOUT_SECONDS,
     GAP_QUESTIONS,
     INPUTS,
+    KR_SESSION_DONE_NY,
     US_SESSION_DONE_NY,
 )
 from app.data import FetchResult, redact
@@ -65,6 +66,7 @@ class Gap:
     check_name: str
     base: pd.Series  # history before `date` to splice onto
     base_note: str
+    vetoes: list[tuple[str, float, float, str]] = field(default_factory=list)  # (name, value, tol, kind)
 
 
 @dataclass
@@ -91,10 +93,11 @@ def session_done(market: str, day: str, now_ny: datetime) -> bool:
         return True
     if day > today:
         return False
-    if market == "us":
-        hour, minute = (int(x) for x in US_SESSION_DONE_NY.split(":"))
+    if market in ("us", "kr"):
+        cutoff = US_SESSION_DONE_NY if market == "us" else KR_SESSION_DONE_NY
+        hour, minute = (int(x) for x in cutoff.split(":"))
         return (now_ny.hour, now_ny.minute) >= (hour, minute)
-    return True  # "kr": a Korean date's session ends 02:30 NY that morning; "fx": latest value
+    return True  # "fx": the latest value is what's wanted
 
 
 def find_gaps(verified: dict[str, Verified], results: dict[str, FetchResult], now_ny: datetime) -> list[Gap]:
@@ -116,20 +119,26 @@ def find_gaps(verified: dict[str, Verified], results: dict[str, FetchResult], no
         result, tolerance, kind = check
         assert result.series is not None
         st = v.status
+        question, market = GAP_QUESTIONS[key]
+        # Newest session the check has that is finished (an in-progress Korean session at night,
+        # or a US session before the close, is skipped in favor of the last completed one).
+        done = [d for d in (str(ts.date()) for ts in reversed(result.series.index)) if session_done(market, d, now_ny)]
+        if not done:
+            continue
         if st.status in ("MISSING", "UNCONFIRMED"):
-            day = str(result.series.index[-1].date())
-        elif st.preliminary is not None and st.date is not None and st.preliminary.date > st.date:
-            day = st.preliminary.date
+            day = done[0]
+        elif st.date is not None and done[0] > st.date:
+            day = done[0]  # the record is a session behind
         else:
             continue
-        question, market = GAP_QUESTIONS[key]
-        if not session_done(market, day, now_ny):
-            continue
         ts = pd.Timestamp(day)
-        if ts not in result.series.index:
-            continue
 
         base, base_note = _history(key, results, ts, v.series, result)
+        vetoes = [
+            (SOURCE_NAMES[r.source], float(r.series.loc[ts]), tol, kind)
+            for k, tol, kind, confirms in spec.checks
+            if not confirms and (r := results.get(k)) is not None and r.series is not None and ts in r.series.index
+        ]
         gaps.append(
             Gap(
                 key=key,
@@ -141,6 +150,7 @@ def find_gaps(verified: dict[str, Verified], results: dict[str, FetchResult], no
                 check_name=SOURCE_NAMES[result.source],
                 base=base,
                 base_note=base_note,
+                vetoes=vetoes,
             )
         )
     return gaps
@@ -307,6 +317,13 @@ async def fill_gaps(
             report.notes.append(
                 f"{label}: Claude found {value:.4g} for {gap.date} ({_host(url)}), {gap.check_name} has "
                 f"{gap.expected:.4g}; they disagree, not used"
+            )
+            continue
+        vetoed = [(n, v) for n, v, tol, kind in gap.vetoes if not _agrees(v, value, tol, kind)]
+        if vetoed:
+            name, other = vetoed[0]
+            report.notes.append(
+                f"{label}: Claude's {value:.4g} for {gap.date} fails the {name} check ({other:.4g}); not used"
             )
             continue
         report.fills[gap.key] = Fill(gap.key, gap.date, value, url, str(answer.get("source_name") or _host(url)))

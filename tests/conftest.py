@@ -54,7 +54,7 @@ def market(**series_by_input: pd.Series) -> dict[str, FetchResult]:
     base.update(series_by_input)
     sources = {
         "y10": ("cboe", "yahoo", "treasury"),
-        "t3m": ("cboe", "yahoo", "treasury"),
+        "t3m": ("treasury", "cboe"),
         "vix": ("cboe", "yahoo"),
         "effr": ("nyfed",),
         "soxx": ("alpaca", "yahoo"),

@@ -24,8 +24,9 @@ from app.verify import Verified
 STRESS_LABELS = {"CALM": "Calm", "ELEVATED": "Elevated", "STRESSED": "Stressed", "UNKNOWN": "Unknown"}
 TALLY_LABELS = {
     "rates": "a yield jump",
-    "fear": "a market-wide volatility spike",
-    "chips": "neither (chip-specific selling)",
+    "fear": "a volatility spike",
+    "market": "the whole market falling (S&P 500 down 1%+)",
+    "chips": "none of those (chip-specific selling)",
     "unknown": "unknown (rates or VIX data missing)",
 }
 
@@ -68,7 +69,12 @@ def _zscores(changes: pd.Series, window: int) -> pd.Series:
     return ((changes - baseline.mean()) / baseline.std(ddof=1)).dropna()
 
 
-def tally(verified: dict[str, Verified], t: Thresholds = THRESHOLDS) -> Tally:
+def tally(verified: dict[str, Verified], market: pd.Series | None = None, t: Thresholds = THRESHOLDS) -> Tally:
+    """Tag each recent semis drop by what else moved: yields, then VIX, then the S&P 500.
+
+    "Chip-specific" is the residual: nothing we measure moved. It is the bucket the "valuations
+    questioned" headlines describe, but it also holds anything unmeasured (earnings, export rules).
+    """
     soxx = _pct_changes(verified["soxx"].series if "soxx" in verified else None)
     if soxx.empty:
         return Tally(summary="Semis prices unavailable, so the tally can't be built.")
@@ -76,19 +82,25 @@ def tally(verified: dict[str, Verified], t: Thresholds = THRESHOLDS) -> Tally:
     tnx_z = _zscores(tnx, t.tnx_delta_z_window) if not tnx.empty else pd.Series(dtype=float)
     vix = _pct_changes(verified["vix"].series if "vix" in verified else None)
     igv = _pct_changes(verified["igv"].series if "igv" in verified else None)
+    spy = _pct_changes(market)
 
     drops = soxx[soxx <= TALLY_DROP_PCT].iloc[-TALLY_DAYS:]
-    tnx_d, tnx_zd, vix_d, igv_d = (dict(x.items()) for x in (tnx, tnx_z, vix, igv))
+    tnx_d, tnx_zd, vix_d, igv_d, spy_d = (dict(x.items()) for x in (tnx, tnx_z, vix, igv, spy))
     days = []
     for ts, move in drops.items():
-        bps, z, vchg, ichg = (None if d.get(ts) is None else float(d[ts]) for d in (tnx_d, tnx_zd, vix_d, igv_d))
+        bps, z, vchg, ichg, schg = (
+            None if d.get(ts) is None else float(d[ts]) for d in (tnx_d, tnx_zd, vix_d, igv_d, spy_d)
+        )
         rates = None if bps is None else (bps >= t.tnx_1d_spike_bps or (z is not None and z >= t.tnx_delta_z))
         fear = None if vchg is None else vchg >= t.vix_jump_pct
+        broad = None if schg is None else schg <= t.market_drop_pct
         if rates:
             driver = "rates"
         elif fear:
             driver = "fear"
-        elif rates is False and fear is False:
+        elif broad:
+            driver = "market"
+        elif rates is False and fear is False and broad is False:
             driver = "chips"
         else:
             driver = "unknown"
@@ -96,6 +108,7 @@ def tally(verified: dict[str, Verified], t: Thresholds = THRESHOLDS) -> Tally:
             f"10Y {bps:+.0f} bps" if bps is not None else "10Y n/a",
             f"VIX {vchg:+.0f}%" if vchg is not None else "VIX n/a",
         ]
+        parts.append(f"S&P 500 {schg:+.1f}%" if schg is not None else "S&P 500 n/a")
         if ichg is not None:
             parts.append(f"software {ichg:+.1f}%")
         days.append(
@@ -111,7 +124,11 @@ def tally(verified: dict[str, Verified], t: Thresholds = THRESHOLDS) -> Tally:
         )
     days.reverse()  # newest first
     counts = Counter(d.driver for d in days)
-    ordered = {k: counts.get(k, 0) for k in ("rates", "fear", "chips", "unknown") if counts.get(k, 0) or k != "unknown"}
+    ordered = {
+        k: counts.get(k, 0)
+        for k in ("rates", "fear", "market", "chips", "unknown")
+        if counts.get(k, 0) or k != "unknown"
+    }
     if not days:
         summary = f"No semis drop of {abs(TALLY_DROP_PCT):.1f}% or more in the available history."
     else:

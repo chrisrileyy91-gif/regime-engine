@@ -20,6 +20,7 @@ class Thresholds:
     vix_level: float = 20.0  # volatility high enough to force systematic de-risking
     semi_rsi_digestion: float = 40.0  # SOXX RSI(14) below this = chip momentum broken
     vix_jump_pct: float = 10.0  # tally: VIX up this much on a semis down day = market-wide fear
+    market_drop_pct: float = -1.0  # tally: SPY down this much the same day = broad selling
 
     # --- Backdrop and telemetry (shown, never counted as stress) -----------------------------
     tnx_pctile_high: float = 80.0  # 10Y higher than this % of the trailing window
@@ -124,7 +125,7 @@ INPUTS: dict[str, InputSpec] = {
         "Dollar index (DXY)",
         ("dxy@eodhd",),
         (("dxy@yahoo", 0.25, "abs", True), ("dxy@ecb", 1.0, "abs", False)),
-        True,
+        False,  # background telemetry since the cycle moved to filings
         4,
     ),
     "kospi": InputSpec("KOSPI", ("kospi@eodhd", "kospi@krx"), (("kospi@yahoo", 0.1, "pct", True),), False, 6),
@@ -252,6 +253,9 @@ CYCLE_HISTORY_QUARTERS = 12
 # Chip stock prices for "earnings vs price": quarter-end closes from the Alpaca SIP feed, fetched
 # with SOXX/IGV. Not cross-checked (a quarterly comparison, never part of the daily call).
 CYCLE_PRICE_TICKERS = tuple(t for t, _, _ in CYCLE_COMPANIES["chips"])
+# The broad market, for the tally: a semis drop on a day SPY also fell is market-wide selling, not
+# chip-specific. Alpaca SIP, fetched with SOXX, not cross-checked (classification only).
+MARKET_TICKER = "SPY"
 
 
 @dataclass(frozen=True)

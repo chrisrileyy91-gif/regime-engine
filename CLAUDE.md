@@ -117,9 +117,13 @@ software group it alone faked an acceleration on the first real read.
 ## Today (daily)
 - Drivers (same session only): 10Y +10 bps or z > 1.5 · VIX > 20 · SOXX RSI < 40.
 - Stress: 0 active = Calm, 1 = Elevated, 2+ or VIX > 30 = Stressed, all unknown = Unknown.
-- Tally: the last 20 sessions with SOXX ≤ −1.5%, each tagged yields (10Y +10 bps or z ≥ 1.5),
-  else volatility (VIX +10% that day), else chip-specific (nothing macro moved). VIX is partly
-  reflexive (it rises because stocks fall), so "volatility" days are market-wide, not causes.
+- Tally: the last 20 sessions with SOXX ≤ −1.5%, each tagged in order: yields (10Y +10 bps or
+  z ≥ 1.5), volatility (VIX +10% that day), whole market (SPY ≤ −1% that day, Alpaca SIP), else
+  chip-specific. Chip-specific is a residual (nothing measured moved) and is never claimed when a
+  check is missing. VIX is partly reflexive, so "volatility" days describe, they don't cause.
+- Alpaca daily bars dated today are dropped until 16:20 NY: a manual run at 09:50 once recorded a
+  partial session as a VERIFIED close (Yahoo's bar was equally partial).
+- DXY, KOSPI and Samsung are telemetry only (`used_in_call=False`): their gaps never degrade the read.
 
 ## Known gaps (do not paper over)
 - Thresholds are not fitted. No backtest exists yet. Correct data into an untested rule is

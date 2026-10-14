@@ -341,3 +341,17 @@ async def test_treasury_failure_reports_both_keys() -> None:
         results = await data.fetch_treasury(client)
     assert sorted(r.key for r in results) == ["t3m@treasury", "y10@treasury"]
     assert not any(r.ok for r in results)
+
+
+def test_unfinished_us_session_bar_is_dropped() -> None:
+    """Manual run at 09:50 ET: Alpaca's bar for today is partial and must not count as a close."""
+    from datetime import datetime
+
+    from app.data import NY, drop_unfinished_us_session
+
+    idx = pd.to_datetime(["2026-10-13", "2026-10-14"])
+    bars = pd.Series([100.0, 98.0], index=idx)
+    morning = datetime(2026, 10, 14, 9, 50, tzinfo=NY)
+    after = datetime(2026, 10, 14, 16, 25, tzinfo=NY)
+    assert list(drop_unfinished_us_session(bars, morning).index) == [idx[0]]
+    assert len(drop_unfinished_us_session(bars, after)) == 2

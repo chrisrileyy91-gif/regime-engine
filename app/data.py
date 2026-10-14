@@ -52,9 +52,11 @@ from app.config import (
     KRX_BASE_URL,
     KRX_HISTORY_SESSIONS,
     KRX_MAX_CALLS_PER_RUN,
+    MARKET_TICKER,
     NYFED_EFFR_URL,
     SECRET_ENV_VARS,
     TREASURY_CSV_URL,
+    US_SESSION_DONE_NY,
     USER_AGENT,
     YAHOO_HOSTS,
     YAHOO_SYMBOLS,
@@ -440,7 +442,7 @@ async def fetch_ecb(client: httpx.AsyncClient) -> FetchResult:
 
 async def fetch_alpaca(client: httpx.AsyncClient) -> list[FetchResult]:
     targets = {"soxx@alpaca": "SOXX", "igv@alpaca": "IGV"}
-    targets.update({f"{t.lower()}@alpaca": t for t in CYCLE_PRICE_TICKERS})
+    targets.update({f"{t.lower()}@alpaca": t for t in (*CYCLE_PRICE_TICKERS, MARKET_TICKER)})
     key_id, secret = os.environ.get("APCA_API_KEY_ID"), os.environ.get("APCA_API_SECRET_KEY")
     if not key_id or not secret:
         return [
@@ -471,10 +473,24 @@ async def fetch_alpaca(client: httpx.AsyncClient) -> list[FetchResult]:
     out = []
     for key, symbol in targets.items():
         try:
-            out.append(FetchResult(key, symbol, "alpaca", parse_alpaca_bars(pages, symbol)))
+            bars = drop_unfinished_us_session(parse_alpaca_bars(pages, symbol), now)
+            out.append(FetchResult(key, symbol, "alpaca", bars))
         except Exception as exc:
             out.append(FetchResult(key, symbol, "alpaca", None, _error(exc)))
     return out
+
+
+def drop_unfinished_us_session(series: pd.Series, now: datetime) -> pd.Series:
+    """Drop today's daily bar until the US session is over.
+
+    A run during market hours (a manual dispatch at 09:50) otherwise gets a partial bar for
+    today, which Yahoo's equally partial bar then "confirms" as a finished close.
+    """
+    now_ny = now.astimezone(NY)
+    if now_ny.strftime("%H:%M") >= US_SESSION_DONE_NY or series.empty:
+        return series
+    today = pd.Timestamp(now_ny.date())
+    return series[series.index < today]
 
 
 def krx_candidate_dates(today_kst: pd.Timestamp, sessions: int) -> list[str]:

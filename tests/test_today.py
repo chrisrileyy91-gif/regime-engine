@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from app.drivers import build_drivers
@@ -47,35 +48,44 @@ def test_unknown_inputs_are_named() -> None:
     assert stress(f, build_drivers(f, {})).level == "UNKNOWN"
 
 
-def _tally_market() -> dict:
-    """300 sessions; three semis drops of -3%: one with a yield jump, one with a VIX spike, one alone."""
+def _tally_market() -> tuple[dict, pd.Series]:
+    """300 sessions; four semis drops of -3%: with a yield jump, a VIX spike, the S&P down 2%, alone."""
     n = 300
-    soxx = [100.0] * n
+    soxx, spy = [100.0] * n, [500.0] * n
     y10 = list(flat_then(4.0, n))
     vix = [15.0] * n
-    for i, kind in ((-30, "rates"), (-20, "fear"), (-10, "chips")):
+    for i, kind in ((-40, "rates"), (-30, "fear"), (-20, "market"), (-10, "chips")):
         soxx[i:] = [v * 0.97 for v in soxx[i:]]
         if kind == "rates":
             y10[i:] = [v + 0.15 for v in y10[i:]]
         if kind == "fear":
             vix[i] = 19.0
-    return market(soxx=series(soxx), y10=series(y10), vix=series(vix))
+        if kind == "market":
+            spy[i:] = [v * 0.98 for v in spy[i:]]
+    return market(soxx=series(soxx), y10=series(y10), vix=series(vix)), series(spy)
 
 
 def test_tally_classifies_each_drop_by_what_moved_that_day() -> None:
-    results = _tally_market()
-    t = tally(verify_all(results, TODAY.date()))
-    assert [d.driver for d in t.days] == ["chips", "fear", "rates"]  # newest first
-    assert t.counts == {"rates": 1, "fear": 1, "chips": 1}
-    assert "Of the last 3 semis drops of 1.5% or more" in t.summary
+    results, spy = _tally_market()
+    t = tally(verify_all(results, TODAY.date()), spy)
+    assert [d.driver for d in t.days] == ["chips", "market", "fear", "rates"]  # newest first
+    assert t.counts == {"rates": 1, "fear": 1, "market": 1, "chips": 1}
+    assert "Of the last 4 semis drops of 1.5% or more" in t.summary
+
+
+def test_without_the_market_series_nothing_is_called_chip_specific() -> None:
+    """Chip-specific is a residual: it can't be claimed if the S&P 500 wasn't checked."""
+    results, _ = _tally_market()
+    drivers = {d.driver for d in tally(verify_all(results, TODAY.date())).days}
+    assert "chips" not in drivers and "unknown" in drivers
 
 
 def test_tally_without_rates_data_says_unknown() -> None:
-    results = _tally_market()
+    results, spy = _tally_market()
     for key in [k for k in results if k.startswith("y10@")]:
         results[key] = results[key].__class__(key, "TNX", key.split("@")[1], None, "down")
-    days = tally(verify_all(results, TODAY.date())).days
-    assert {d.driver for d in days} <= {"fear", "unknown"}
+    days = tally(verify_all(results, TODAY.date()), spy).days
+    assert {d.driver for d in days} <= {"fear", "market", "unknown"} and "chips" not in {d.driver for d in days}
 
 
 def test_overnight_line() -> None:

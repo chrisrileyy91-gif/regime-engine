@@ -9,7 +9,7 @@ import pandas as pd
 
 from app.cache import SnapshotStore
 from app.claude_fill import FillReport, apply_fills
-from app.config import CYCLE_PRICE_TICKERS
+from app.config import CYCLE_PRICE_TICKERS, MARKET_TICKER
 from app.data import FetchResult, fetch_all
 from app.drivers import backdrop, build_drivers, diagnose
 from app.features import build_features
@@ -33,6 +33,11 @@ def chip_prices(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
         if r is not None and r.series is not None and not r.series.empty:
             out[ticker] = r.series
     return out
+
+
+def market_series(results: dict[str, FetchResult]) -> pd.Series | None:
+    r = results.get(f"{MARKET_TICKER.lower()}@alpaca")
+    return r.series if r is not None and r.ok else None
 
 
 def build_status(
@@ -77,7 +82,7 @@ def build_status(
         as_of=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         cycle=cycle,
         today=day,
-        tally=tally(verified),
+        tally=tally(verified, market_series(results)),
         diagnosis=diagnose(features, drivers),
         backdrop=backdrop(features),
         drivers=drivers,

@@ -1,9 +1,13 @@
 # CLAUDE.md — System Contract for the Market Regime Engine
 
 ## What this repo is
-A rule-based diagnostic engine that classifies the macro-liquidity / semiconductor-cycle regime
-and publishes it as a phone page (GitHub Pages). It is a **measurement tool, not a trading
-signal**. Every threshold is uncalibrated until a backtest says otherwise.
+A diagnostic engine published as a phone page (GitHub Pages) with two layers on two clocks:
+- **The cycle** (`app/fundamentals.py`, quarterly): which phase of the AI capex cycle we are in,
+  read from company filings at SEC EDGAR. Buildout → Digestion → Monetization.
+- **Today** (`app/today.py`, `app/drivers.py`, daily): stress (Calm / Elevated / Stressed) from
+  what moved that session, the scapegoat tally, the overnight line.
+It is a **measurement tool, not a trading signal**. Every threshold is uncalibrated until a
+backtest says otherwise.
 
 ## The data rule: verified or blank, same day
 Every number used in the call comes from its source of record **on the day it describes** and
@@ -20,6 +24,8 @@ records a day later.
 | SOXX, IGV | Alpaca consolidated tape (SIP) | Yahoo ±0.3% | — |
 | DXY | ICE formula on EODHD live FX | Yahoo DX-Y.NYB ±0.25 | ECB-fix DXY ±1.0 |
 | KOSPI, Samsung | EODHD end-of-day (2–3h after close) → KRX Open API (next day) | Yahoo ±0.1% | — |
+| Company filings | SEC EDGAR XBRL companyconcept (each company's own 10-Q/10-K) | — | entity-name check per CIK |
+| Chip stock prices | Alpaca SIP quarter-end closes (earnings-vs-price catalyst only) | — | — |
 
 Statuses: **VERIFIED** (a confirming source has the same date and agrees) · **OFFICIAL**
 (official record, not yet confirmed) · **UNCONFIRMED** (vendor record nothing confirmed →
@@ -50,8 +56,10 @@ the only source for a number, and never send it a conflict to break.
 
 ## Architecture (one direction of flow, pure core)
 `data.py` (httpx I/O, parsers) → `verify.py` (verified-or-blank) → `features.py` (named
-features) → `regime.py` (pure classifier) + `drivers.py` ("why semis are moving") →
-`service.py` (payload) → `snapshot.py` (publish job) / `main.py` (local FastAPI, not deployed).
+features) → `drivers.py` ("why semis are moving") + `today.py` (stress, tally, overnight) +
+`regime.py` (telemetry signals, Kleene helpers) — and separately `fundamentals.py` (SEC fetch,
+cached; quarters; phases; catalysts) → `service.py` (payload) → `snapshot.py` (publish job) /
+`main.py` (local FastAPI, not deployed).
 `alert.py` posts to Pheme. `config.py` is the ONLY place thresholds, sources and tolerances live.
 `web/index.html` is a dumb renderer: all logic is in Python and arrives in `regime.json`.
 
@@ -61,10 +69,11 @@ features) → `regime.py` (pure classifier) + `drivers.py` ("why semis are movin
   16:15 VIX settle, plus the free SIP 15-minute rule). Both call `publish.yml`.
 - Never add `schedule:` blocks; the clock is the only scheduler.
 - State on the `snapshots` release: `regime.json`, `history.json`, `krx_cache.json`,
-  `claude_usage.json`. Never in
+  `claude_usage.json`, `sec_cache.json` (filings, refreshed at most every 20h). Never in
   git. A failed download of an existing asset must stop the run.
-- Secrets: `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `ANTHROPIC_API_KEY`, `DISCORD_PHEME_WEBHOOK`;
-  optional `EODHD_API_KEY`, `KRX_API_KEY`. EODHD takes its key in the URL, so every error string passes through
+- Secrets: `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `ANTHROPIC_API_KEY`, `DISCORD_PHEME_WEBHOOK`,
+  `SEC_USER_AGENT` ("regime-engine <contact email>"; SEC refuses anonymous clients); optional
+  `EODHD_API_KEY`, `KRX_API_KEY`. Never put a personal email in the repo (it is public). EODHD takes its key in the URL, so every error string passes through
   `data.redact()` before it can be published. Never bypass it.
 - Pheme alerts when data quality is DEGRADED/STALE or no read was produced. Silent when clean.
 - The page detects a missed scheduled run by itself (schedule mirrored in `web/index.html`).
@@ -78,25 +87,50 @@ features) → `regime.py` (pure classifier) + `drivers.py` ("why semis are movin
 - Every displayed value carries its date. Dates are formatted without `%-d` (breaks on Windows).
 - RSI is Wilder-smoothed (TradingView `ta.rsi`), never a plain rolling mean.
 - Keep the original payload keys (`phase`, `risk_level`, `liquidity_squeeze`, `semi_rsi`,
-  `tnx_yield`, `actionable_summary`).
+  `tnx_yield`, `actionable_summary`). `phase` = the cycle phase; `risk_level` = today's stress.
+- Never put a slow-moving level (10Y percentile, DXY level) into the stress label or the cycle.
+  That is what kept the old page on HIGH RISK for months.
 
-## Regime classification (precedence: 2 > 4 > 1 > 3, else Unclassified)
-- **Phase 2 — Liquidity Squeeze (ANY):** 10Y above the 80th percentile of its past 250 sessions
-  · z-score of the latest 10Y change vs prior 60 > +1.5 · VIX > 20. Risk HIGH. (The spec's fixed
-  "10Y > 4.25%" fired every day once yields moved structurally above it.)
-- **Phase 4 — Rate Easing (ALL):** EFFR − 3M bill > 0.10pp (cuts-priced proxy; the 3M bill
-  replaced the 2Y because no same-day 2Y source exists, and its horizon is closer to fed funds
-  futures) · DXY < 102. Risk LOW.
-- **Phase 1 — Hardware Buildout (ALL):** SOXX RSI(14) > 55 · 10Y 5-session change < +5 bps.
-- **Phase 3 — Monetization (ALL):** IGV/SOXX SMA20 rising over 5 sessions · ratio below its
-  120-day mean · SaaS ARR growth > 15% (**unsourced** → `confidence: PARTIAL`). Risk LOW.
-- **Unclassified:** nothing fires. Never default to a phase.
+## The cycle (from filings; precedence 3 > 1 > 2, else Between phases)
+Groups (`CYCLE_COMPANIES`): capex = MSFT, GOOGL, AMZN, META, ORCL (summed dollars); chip revenue =
+NVDA, AVGO, AMD, MU (summed); software revenue = CRM, NOW, ADBE, INTU, WDAY, PLTR (**median
+company**, plus breadth). Oracle is a capex spender: its growth is AI cloud rental, and in the
+software group it alone faked an acceleration on the first real read.
+- Quarters: `quarterize` keeps the latest filing per (start, end), takes ~3-month facts and
+  differences of year-to-date chains (Q4 = FY − 9M), ignores TTM facts (Amazon). Each quarter maps
+  to the nearest calendar quarter end. Growth = trailing-12-month total vs a year earlier. A group
+  quarter exists only when every company has it.
+- **Buildout (ALL):** capex growth ≥ 20% · capex growth not ≥ 5 pts below its 4-quarter peak ·
+  chip growth ≥ 25% · chip growth not rolled over (same test).
+- **Digestion (ALL):** capex growth ≥ 10% · capex or chip growth rolled over. (Mutually exclusive
+  with Buildout.)
+- **Monetization (ALL):** median software growth ≥ 10% · median company's growth change > 0 in
+  each of the last two quarters, totalling ≥ 1.0 pt · at least half the companies accelerating.
+  Can overlap Buildout or Digestion; when it does it is the headline and `phases_met` shows both.
+- `since` = first quarter of the current run; `confirmed` after 2 consecutive quarters.
+- Catalysts: software (from the Monetization check), chip earnings vs chip prices (TTM EPS vs
+  price, year to the latest quarter), rate cuts (3M bill vs EFFR, as before).
+- First real read (filings to Q2 2026): Buildout since Q1 2026, confirmed; Q4 2024–Q4 2025 was
+  Digestion (chip revenue growth rolled over from 81% to ~50%); software "starting" (+0.64 then
+  +0.36 pts, total 0.992 vs 1.0 needed). `tests/fixtures/sec_filings.txt` holds that data.
+
+## Today (daily)
+- Drivers (same session only): 10Y +10 bps or z > 1.5 · VIX > 20 · SOXX RSI < 40.
+- Stress: 0 active = Calm, 1 = Elevated, 2+ or VIX > 30 = Stressed, all unknown = Unknown.
+- Tally: the last 20 sessions with SOXX ≤ −1.5%, each tagged yields (10Y +10 bps or z ≥ 1.5),
+  else volatility (VIX +10% that day), else chip-specific (nothing macro moved). VIX is partly
+  reflexive (it rises because stocks fall), so "volatility" days are market-wide, not causes.
 
 ## Known gaps (do not paper over)
 - Thresholds are not fitted. No backtest exists yet. Correct data into an untested rule is
   still an untested call.
-- SaaS ARR growth has no feed. EFFR − 3M bill is a proxy, not the futures curve. Bills can trade
-  away from EFFR on supply alone.
+- EFFR − 3M bill is a proxy, not the futures curve. Bills can trade away from EFFR on supply alone.
+- Filings lag: a quarter is only read once the last company in a group reports (~6–8 weeks after
+  quarter end), so the cycle runs a quarter behind by design. Q4 values derived as FY − 9M
+  include year-end adjustments; Q4 EPS derived this way is approximate (share counts differ).
+- Old EPS facts are not split-adjusted unless a later filing restated them; the earnings catalyst
+  only uses the latest two years, which are post-split for NVDA and AVGO. Watch for new splits.
+- Group membership is a judgment call (who counts as "software"). Changing it changes the read.
 - EFFR is published the next morning and changes only at FOMC decisions. On a decision day the
   16:25 read still carries the pre-decision EFFR.
 - DXY is computed from FX quotes (EODHD free plan: 15-minute delay) with ICE's formula and must

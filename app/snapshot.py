@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from app.claude_fill import FillReport, UsageState, fill_gaps
-from app.data import FetchResult, KrxCache, fetch_all
+from app.data import FetchResult, KrxCache, fetch_all, redact
+from app.fundamentals import SecCache, fetch_filings
 from app.models import DataQuality, QualityIssue, RegimeStatus
 from app.service import build_status
 from app.verify import verify_all
@@ -28,6 +29,7 @@ from app.verify import verify_all
 HISTORY_LIMIT = 750  # ~18 months at two runs per weekday
 CRITICAL_INPUTS = ("tnx_pct", "vix", "soxx_rsi")
 KRX_CACHE_FILE = "krx_cache.json"
+SEC_CACHE_FILE = "sec_cache.json"
 CLAUDE_USAGE_FILE = "claude_usage.json"
 PAGE_SOURCE = Path(__file__).resolve().parent.parent / "web" / "index.html"
 
@@ -37,8 +39,8 @@ def history_row(status: RegimeStatus) -> dict[str, Any]:
         "as_of": status.as_of,
         "phase_id": status.phase_id,
         "phase": status.phase,
+        "cycle_through": status.cycle.through if status.cycle else None,
         "risk": status.risk_level,
-        "confidence": status.confidence,
         "tnx": status.inputs.get("tnx_pct"),
         "vix": status.inputs.get("vix"),
         "soxx_rsi": status.inputs.get("soxx_rsi"),
@@ -57,11 +59,15 @@ def _read_json(path: Path) -> Any:
 
 
 def resolve_status(
-    results: dict[str, FetchResult] | None, error: str | None, state: Path, fills: FillReport | None = None
+    results: dict[str, FetchResult] | None,
+    error: str | None,
+    state: Path,
+    fills: FillReport | None = None,
+    sec_cache: SecCache | None = None,
 ) -> RegimeStatus:
     """Live status if any critical input exists, else the previous snapshot marked stale."""
     if results is not None:
-        status = build_status(results, fills=fills)
+        status = build_status(results, fills=fills, sec_cache=sec_cache)
         if any(status.inputs.get(k) is not None for k in CRITICAL_INPUTS):
             return status
         error = "all critical feeds (10Y, VIX, SOXX) unavailable"
@@ -116,6 +122,23 @@ async def _fill(results: dict[str, FetchResult] | None, usage: UsageState) -> Fi
     return await fill_gaps(verified, results, usage)
 
 
+def load_sec_cache(state: Path) -> SecCache:
+    data = _read_json(state / SEC_CACHE_FILE)
+    return data if isinstance(data, dict) else {}
+
+
+def save_sec_cache(state: Path, cache: SecCache) -> None:
+    state.mkdir(parents=True, exist_ok=True)
+    (state / SEC_CACHE_FILE).write_text(json.dumps(cache, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+
+
+async def _filings(cache: SecCache) -> None:
+    try:
+        cache["notes"] = await fetch_filings(None, cache)
+    except Exception as exc:  # keep the cached filings; the cycle still reads from them
+        cache["notes"] = [f"SEC refresh failed: {redact(f'{type(exc).__name__}: {exc}')}"]
+
+
 def load_krx_cache(state: Path) -> KrxCache:
     data = _read_json(state / KRX_CACHE_FILE)
     return data if isinstance(data, dict) else {}
@@ -139,17 +162,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--site", type=Path, default=Path("site"))
     args = parser.parse_args(argv)
 
+    sec_cache = load_sec_cache(args.state)
+    asyncio.run(_filings(sec_cache))
+    save_sec_cache(args.state, sec_cache)
     krx_cache = load_krx_cache(args.state)
     results, error = asyncio.run(_fetch(krx_cache))
     save_krx_cache(args.state, krx_cache)
     usage = load_usage(args.state)
     fills = asyncio.run(_fill(results, usage))
     save_usage(args.state, usage)
-    status = resolve_status(results, error, args.state, fills)
+    status = resolve_status(results, error, args.state, fills, sec_cache)
     history = write_outputs(status, args.state, args.site)
 
     quality = status.data_quality
-    print(f"phase={status.phase_id} {status.phase} | risk={status.risk_level} | confidence={status.confidence}")
+    cycle = status.cycle
+    if cycle is not None:
+        state = "confirmed" if cycle.confirmed else "not yet confirmed"
+        print(f"cycle={cycle.phase} since {cycle.since} ({state}), filings through {cycle.through}")
+        for m in cycle.metrics:
+            print(f"  {m.label}: {m.latest} (prev {m.previous})")
+        for c in cycle.catalysts:
+            print(f"  catalyst {c.key}: {c.status} - {c.detail}")
+        for note in cycle.notes:
+            print(f"  [cycle] {note}")
+    print(f"today={status.risk_level} | tally: {status.tally.summary if status.tally else 'n/a'}")
     print(f"data={quality.status if quality else 'n/a'} | stale={status.stale} | history rows {len(history)}")
     if quality:
         print(f"  {quality.summary}")

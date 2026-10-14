@@ -29,6 +29,8 @@ on:
         required: false
       DISCORD_PHEME_WEBHOOK:
         required: false
+      SEC_USER_AGENT:
+        required: false
   workflow_dispatch:
 
 permissions:
@@ -62,7 +64,7 @@ jobs:
             # The release exists, so a failed download must stop the run rather than
             # publish over the stored history with an empty one.
             assets=$(gh release view "$RELEASE" --json assets -q '.assets[].name')
-            for f in regime.json history.json krx_cache.json claude_usage.json; do
+            for f in regime.json history.json krx_cache.json claude_usage.json sec_cache.json; do
               if grep -qx "$f" <<< "$assets"; then
                 gh release download "$RELEASE" --pattern "$f" --dir state --clobber
               fi
@@ -81,12 +83,15 @@ jobs:
           KRX_API_KEY: ${{ secrets.KRX_API_KEY }}
           EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
         run: python -m app.snapshot --state state --site site
 
-      - name: Save snapshot, history, KRX cache and Claude spend ledger
+      - name: Save snapshot, history, caches and Claude spend ledger
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$RELEASE" state/regime.json state/history.json state/krx_cache.json state/claude_usage.json --clobber
+        run: |
+          gh release upload "$RELEASE" state/regime.json state/history.json state/krx_cache.json \
+            state/claude_usage.json state/sec_cache.json --clobber
 
       - name: Alert Pheme if the read is degraded, stale or missing
         if: always()
@@ -106,7 +111,7 @@ jobs:
           {
             echo "### Regime publish"
             if [ -f site/regime.json ]; then
-              python -c "import json;d=json.load(open('site/regime.json'));q=d.get('data_quality') or {};print(f\"**{d['phase']}** · risk {d['risk_level']} · data {q.get('status')} · stale {d['stale']}\");print();print(d.get('diagnosis',''));print();[print(f\"- {i['status']} {i['label']}: {i['value']} ({i['date']}, {i['source']})\") for i in q.get('inputs',[])]"
+              python -c "import json;d=json.load(open('site/regime.json'));q=d.get('data_quality') or {};c=d.get('cycle') or {};print(f\"**{d['phase']}** since {c.get('since')} (filings through {c.get('through')}) · today {d['risk_level']} · data {q.get('status')} · stale {d['stale']}\");print();print(d.get('diagnosis',''));print();[print(f\"- {i['status']} {i['label']}: {i['value']} ({i['date']}, {i['source']})\") for i in q.get('inputs',[])]"
             else
               echo "No snapshot written."
             fi

@@ -35,6 +35,7 @@ from app.config import (
     CBOE_INDEXES,
     CBOE_QUOTE_URL,
     CBOE_VIX_CSV_URL,
+    CYCLE_PRICE_TICKERS,
     DXY_CONSTANT,
     DXY_WEIGHTS,
     ECB_90D_URL,
@@ -439,6 +440,7 @@ async def fetch_ecb(client: httpx.AsyncClient) -> FetchResult:
 
 async def fetch_alpaca(client: httpx.AsyncClient) -> list[FetchResult]:
     targets = {"soxx@alpaca": "SOXX", "igv@alpaca": "IGV"}
+    targets.update({f"{t.lower()}@alpaca": t for t in CYCLE_PRICE_TICKERS})
     key_id, secret = os.environ.get("APCA_API_KEY_ID"), os.environ.get("APCA_API_SECRET_KEY")
     if not key_id or not secret:
         return [

@@ -9,7 +9,16 @@ from app import alert
 from app.data import FetchResult
 from app.drivers import backdrop, build_drivers, day_label, diagnose
 from app.models import InputStatus, Preliminary
-from app.snapshot import HISTORY_LIMIT, load_krx_cache, resolve_status, save_krx_cache, write_outputs
+from app.snapshot import (
+    HISTORY_LIMIT,
+    load_krx_cache,
+    load_sec_cache,
+    resolve_status,
+    save_krx_cache,
+    save_sec_cache,
+    write_outputs,
+)
+from tests.sec_fixture import sec_cache
 from tests.test_regime import calm
 
 DATES = {"y10": "2026-10-13", "vix": "2026-10-13", "soxx": "2026-10-13", "igv": "2026-10-13"}
@@ -155,3 +164,45 @@ def test_alert_on_missing_read() -> None:
 def test_alert_refuses_non_discord_webhook() -> None:
     with pytest.raises(ValueError):
         alert.post("https://discordapp.com/api/webhooks/x", "hi")
+
+
+def test_sec_cache_roundtrip(tmp_path: Path) -> None:
+    cache = sec_cache()
+    save_sec_cache(tmp_path, cache)
+    assert load_sec_cache(tmp_path) == json.loads(json.dumps(cache))
+    assert load_sec_cache(tmp_path / "missing") == {}
+
+
+def test_published_read_carries_cycle_and_today(tmp_path: Path, calm_market: dict[str, FetchResult]) -> None:
+    status = resolve_status(calm_market, None, tmp_path, sec_cache=sec_cache())
+    assert (status.phase, status.phase_id, status.risk_level) == ("Buildout", 1, "CALM")
+    assert status.cycle is not None and status.cycle.since == "Q1 2026"
+    assert status.today is not None and status.tally is not None
+    row = write_outputs(status, tmp_path / "state", tmp_path / "site")[-1]
+    assert row["phase"] == "Buildout" and row["cycle_through"] == "Q2 2026" and row["risk"] == "CALM"
+
+
+def test_old_snapshot_still_loads_as_stale(tmp_path: Path) -> None:
+    """regime.json written by the previous version (rules, matrix, confidence) must still parse."""
+    state = tmp_path / "state"
+    state.mkdir()
+    old = {
+        "phase": "Phase 2: Valuation Digestion & Liquidity Squeeze",
+        "risk_level": "HIGH",
+        "liquidity_squeeze": True,
+        "semi_rsi": 48.0,
+        "tnx_yield": 5.2,
+        "actionable_summary": "x",
+        "phase_id": 2,
+        "confidence": "FULL",
+        "as_of": "2026-10-14T10:01:00+00:00",
+        "matrix": {"macro_liquidity": "SQUEEZE"},
+        "rules": [],
+        "telemetry": [],
+        "inputs": {},
+        "sources": [],
+        "notes": [],
+    }
+    (state / "regime.json").write_text(json.dumps(old))
+    stale = resolve_status(None, "down", state)
+    assert stale.stale and stale.cycle is None

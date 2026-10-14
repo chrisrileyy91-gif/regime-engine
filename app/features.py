@@ -39,14 +39,12 @@ class MarketFeatures:
     igv_soxx_ratio: float | None = None
     ratio_sma: float | None = None
     ratio_sma_rising: bool | None = None
-    ratio_below_trough_mean: bool | None = None
     ks11: float | None = None
     ks11_sma200: float | None = None
     dxy: float | None = None
     bill_3m_pct: float | None = None
     effr_pct: float | None = None
     effr_minus_3m_pct: float | None = None
-    saas_arr_growth_pct: float | None = None  # unsourced by design
     dates: dict[str, str] = field(default_factory=dict)  # input -> date of the official value used
 
     def as_dict(self) -> dict[str, object]:
@@ -94,8 +92,6 @@ def build_features(verified: dict[str, Verified], t: Thresholds = THRESHOLDS) ->
         if len(ratio_sma) > t.ratio_slope_lookback:
             f.ratio_sma = float(ratio_sma.iloc[-1])
             f.ratio_sma_rising = bool(ratio_sma.iloc[-1] > ratio_sma.iloc[-1 - t.ratio_slope_lookback])
-        if len(ratio) >= t.ratio_trough_window and f.igv_soxx_ratio is not None:
-            f.ratio_below_trough_mean = bool(f.igv_soxx_ratio < float(ratio.iloc[-t.ratio_trough_window :].mean()))
 
     samsung = get("samsung")
     if samsung is not None:

@@ -11,34 +11,26 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Thresholds:
-    # --- Phase 2: Liquidity Squeeze (any one fires) — UNCALIBRATED -------------
-    # Yield leg is RELATIVE: the spec's fixed "> 4.25%" fired every day once the
-    # 10Y moved structurally above it (first live read: 5.22%, falling, VIX 15).
+    """The daily layer. The cycle's thresholds are in CycleThresholds below. All UNCALIBRATED."""
+
+    # --- Today's drivers (each counts toward stress only when it moved that session) ---------
+    tnx_1d_spike_bps: float = 10.0  # 10Y up this much in a session
+    tnx_delta_z: float = 1.5  # ...or an unusual move: z-score of the change vs the prior window
+    tnx_delta_z_window: int = 60
+    vix_level: float = 20.0  # volatility high enough to force systematic de-risking
+    semi_rsi_digestion: float = 40.0  # SOXX RSI(14) below this = chip momentum broken
+    vix_jump_pct: float = 10.0  # tally: VIX up this much on a semis down day = market-wide fear
+
+    # --- Backdrop and telemetry (shown, never counted as stress) -----------------------------
     tnx_pctile_high: float = 80.0  # 10Y higher than this % of the trailing window
     tnx_pctile_window: int = 250  # ~1 year of Treasury business days
-    tnx_delta_z: float = 1.5  # z-score of the latest 1d yield change vs trailing window
-    tnx_delta_z_window: int = 60
-    vix_level: float = 20.0
-
-    # --- Phase 1: Hardware Buildout (both) — UNCALIBRATED ----------------------
-    semi_rsi_strong: float = 55.0
-    tnx_5d_slope_max_bps: float = 5.0
-
-    # --- Phase 3: Monetization ------------------------------------------------
-    ratio_sma_window: int = 20
+    ratio_sma_window: int = 20  # IGV/SOXX ratio trend
     ratio_slope_lookback: int = 5
-    ratio_trough_window: int = 120
-    saas_arr_growth_pct: float = 15.0  # no data source exists — see CLAUDE.md
-
-    # --- Phase 4: Rate Easing (both) — UNCALIBRATED -----------------------------
-    cuts_priced_spread_pct: float = 0.10  # 3M bill below EFFR by more than this = cuts priced
-    dxy_easing_max: float = 102.0
-
-    # --- Telemetry (signals, not phase drivers) --------------------------------
-    tnx_1d_spike_bps: float = 10.0
-    semi_rsi_digestion: float = 40.0
     ks11_sma_window: int = 200
     dxy_compression: float = 104.5
+
+    # --- Rate-cut catalyst ---------------------------------------------------------------------
+    cuts_priced_spread_pct: float = 0.10  # 3M bill below EFFR by more than this = cuts priced
 
     rsi_period: int = 14
 
@@ -208,3 +200,75 @@ GAP_QUESTIONS: dict[str, tuple[str, str]] = {
 }
 US_SESSION_DONE_NY = "16:20"  # a US close for today is only requested after this time
 KR_SESSION_DONE_NY = "03:00"  # KRX closes 15:30 KST = 02:30 EDT / 01:30 EST
+
+# --- The cycle: from company filings (SEC EDGAR XBRL), not prices ---------------------------
+# The three phases are defined by fundamentals: capex and chip revenue (Buildout), spending
+# growth peaking while multiples compress (Digestion), software revenue accelerating
+# (Monetization). Rate cuts are a catalyst, not a phase. All thresholds UNCALIBRATED.
+SEC_CONCEPT_URL = "https://data.sec.gov/api/xbrl/companyconcept/CIK{cik}/us-gaap/{tag}.json"
+SEC_DEFAULT_USER_AGENT = "regime-engine research (https://github.com/chrisrileyy91-gif/regime-engine)"
+SEC_REFRESH_HOURS = 20  # filings change quarterly; refetch at most once per day
+SEC_CONCURRENCY = 4  # SEC allows 10 requests/second
+
+# (ticker, CIK, expected entityName prefix). The name check guards against a wrong CIK.
+# Oracle sits with the capex spenders: its growth is now AI cloud capacity (renting GPUs), which
+# is buildout, not software monetization. In the software group it alone produced a false
+# "acceleration" in the first live read (Oracle 6% -> 22% while the median company slowed).
+CYCLE_COMPANIES: dict[str, list[tuple[str, str, str]]] = {
+    "hyperscalers": [
+        ("MSFT", "0000789019", "MICROSOFT"),
+        ("GOOGL", "0001652044", "ALPHABET"),
+        ("AMZN", "0001018724", "AMAZON"),
+        ("META", "0001326801", "META PLATFORMS"),
+        ("ORCL", "0001341439", "ORACLE"),
+    ],
+    "chips": [
+        ("NVDA", "0001045810", "NVIDIA"),
+        ("AVGO", "0001730168", "BROADCOM"),
+        ("AMD", "0000002488", "ADVANCED MICRO DEVICES"),
+        ("MU", "0000723125", "MICRON"),
+    ],
+    "software": [
+        ("CRM", "0001108524", "SALESFORCE"),
+        ("NOW", "0001373715", "SERVICENOW"),
+        ("ADBE", "0000796343", "ADOBE"),
+        ("INTU", "0000896878", "INTUIT"),
+        ("WDAY", "0001327811", "WORKDAY"),
+        ("PLTR", "0001321655", "PALANTIR"),
+    ],
+}
+# Tags tried in order. The one with the most recent period wins; ties go to the longer history
+# (Intuit files both revenue tags, but only one goes back before 2023).
+CYCLE_TAGS: dict[str, tuple[str, ...]] = {
+    "capex": ("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"),
+    "revenue": ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"),
+    "eps": ("EarningsPerShareDiluted",),
+}
+CYCLE_GROUP_METRIC = {"hyperscalers": "capex", "chips": "revenue", "software": "revenue"}
+# Capex and chip revenue are dollar aggregates (sum). Software is the median company, so one
+# fast grower can't stand in for the industry; breadth (how many are accelerating) is shown too.
+CYCLE_GROUP_HOW = {"hyperscalers": "sum", "chips": "sum", "software": "median"}
+CYCLE_HISTORY_QUARTERS = 12
+# Chip stock prices for "earnings vs price": quarter-end closes from the Alpaca SIP feed, fetched
+# with SOXX/IGV. Not cross-checked (a quarterly comparison, never part of the daily call).
+CYCLE_PRICE_TICKERS = tuple(t for t, _, _ in CYCLE_COMPANIES["chips"])
+
+
+@dataclass(frozen=True)
+class CycleThresholds:
+    buildout_capex_growth: float = 20.0  # hyperscaler capex, trailing-12-month YoY %
+    buildout_chip_growth: float = 25.0  # chip revenue, TTM YoY %
+    digestion_capex_floor: float = 10.0  # still spending heavily
+    rolled_over_points: float = 5.0  # growth this far below its recent peak = "has peaked"
+    peak_window_quarters: int = 4  # "recent peak" = highest reading over this many quarters
+    monetization_software_growth: float = 10.0  # median software company, revenue TTM YoY %
+    monetization_accel_points: float = 1.0  # median company's growth up this much over two quarters
+    confirm_quarters: int = 2  # a phase is "confirmed" after this many consecutive quarters
+
+
+CYCLE = CycleThresholds()
+
+# --- Daily layer -------------------------------------------------------------------------------
+TALLY_DROP_PCT = -1.5  # a "big down day" for semis
+TALLY_DAYS = 20  # the tally covers the most recent this-many big down days
+STRESSED_VIX = 30.0  # VIX above this alone makes the day "Stressed"

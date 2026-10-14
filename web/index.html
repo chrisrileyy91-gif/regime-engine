@@ -14,7 +14,7 @@
     --surface: #ffffff;
     --ink: #13202f;
     --ink-2: #4a5768;
-    --ink-3: #7c8898;
+    --ink-3: #6f7b8c;
     --rule: #dde2e8;
     --track: #e3e8ee;
     --high: #c8382e;
@@ -25,6 +25,12 @@
     --moderate-soft: #fbf1df;
     --low-soft: #e2f3ee;
     --unknown-soft: #eceff3;
+    /* cycle phases: never red (red is reserved for today's stress) */
+    --p1: #2f63c7; --p1-soft: #e3ebfa;
+    --p2: #b77a0f; --p2-soft: #fbf1df;
+    --p3: #23826d; --p3-soft: #e2f3ee;
+    --p0: #7a8696; --p0-soft: #eceff3;
+    --rates: #6a55c9;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
@@ -33,7 +39,7 @@
       --surface: #142132;
       --ink: #e8edf3;
       --ink-2: #a9b5c4;
-      --ink-3: #74829a;
+      --ink-3: #8592a6;
       --rule: #22334a;
       --track: #22334a;
       --high: #f0675c;
@@ -44,6 +50,11 @@
       --moderate-soft: #33291a;
       --low-soft: #15332f;
       --unknown-soft: #1c2a3c;
+      --p1: #6f9cf0; --p1-soft: #1a2a48;
+      --p2: #e2a43a; --p2-soft: #33291a;
+      --p3: #4cc0a3; --p3-soft: #15332f;
+      --p0: #8d99ab; --p0-soft: #1c2a3c;
+      --rates: #a593f2;
       color-scheme: dark;
     }
   }
@@ -56,56 +67,117 @@
     font: 400 16px/1.5 "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
     font-variant-numeric: tabular-nums;
   }
-  main {
-    max-width: 560px;
-    margin: 0 auto;
-    padding: max(20px, env(safe-area-inset-top)) 16px 40px;
-  }
+  main { max-width: 560px; margin: 0 auto; padding: max(20px, env(safe-area-inset-top)) 16px 40px; }
   h1, h2, h3, p { margin: 0; }
   .masthead { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
   .masthead h1 { font-size: 15px; font-weight: 600; letter-spacing: 0.01em; }
   .masthead .updated { font-size: 13px; color: var(--ink-3); text-align: right; }
+  .dataline { margin-top: 2px; font-size: 13px; color: var(--ink-3); }
+  .dataline b { color: var(--ink-2); font-weight: 600; }
 
-  .stale {
-    margin-top: 14px; padding: 10px 12px; border-radius: 8px;
-    background: var(--moderate-soft); color: var(--ink); font-size: 14px;
-    border-left: 3px solid var(--moderate);
-  }
+  .stale, .notice { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: 14px; background: var(--moderate-soft); border-left: 3px solid var(--moderate); }
+  .notice.bad { background: var(--high-soft); border-left-color: var(--high); }
+  .notice ul { margin: 6px 0 0; padding-left: 18px; }
+  .quality-ok { margin-top: 8px; font-size: 13px; color: var(--ink-3); display: flex; gap: 6px; align-items: center; }
+  .quality-ok::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--low); flex: none; }
 
-  /* --- Hero: the cycle dial ------------------------------------------- */
-  .hero { display: grid; justify-items: center; text-align: center; padding: 22px 0 26px; }
-  .dial { width: 100%; max-width: 320px; height: auto; }
-  .dial .seg { fill: none; stroke: var(--track); stroke-width: 14; stroke-linecap: butt; }
+  .layer { margin-top: 26px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); display: flex; justify-content: space-between; gap: 10px; }
+  .layer span:last-child { font-weight: 500; letter-spacing: 0.02em; text-transform: none; }
+
+  /* --- The cycle ------------------------------------------------------------------------ */
+  .hero { display: grid; justify-items: center; text-align: center; padding: 10px 0 4px; }
+  .dial { width: 100%; max-width: 340px; height: auto; }
+  .dial .seg { fill: none; stroke: var(--track); stroke-width: 14; }
   .dial .seg.on { stroke: var(--accent); }
+  .dial .seg.also { stroke: var(--also); opacity: 0.45; }
   .dial .seg-label { fill: var(--ink-3); font-size: 12px; font-weight: 500; }
   .dial .seg-num { fill: var(--ink-3); font-size: 12px; font-weight: 700; }
-  .dial .seg-num.on { fill: var(--accent); }
+  .dial text.on { fill: var(--accent); }
   .dial .seg-label.on { fill: var(--ink); font-weight: 700; }
-  .dial .core-num { fill: var(--accent); font-size: 64px; font-weight: 700; }
+  .dial .core-num { fill: var(--accent); font-size: 60px; font-weight: 700; }
   .dial .core-sub { fill: var(--ink-3); font-size: 11px; font-weight: 500; }
-  .phase-name { margin-top: 10px; font-size: 24px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; max-width: 22ch; }
+  .phase-name { margin-top: 4px; font-size: 26px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
   .phase-meta { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
-  .pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
-    background: var(--unknown-soft); color: var(--ink-2);
-  }
-  .pill.risk { background: var(--accent-soft); color: var(--accent); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: var(--unknown-soft); color: var(--ink-2); }
+  .pill.accent { background: var(--accent-soft); color: var(--accent); }
   .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-  .summary { margin-top: 12px; color: var(--ink-2); font-size: 15px; max-width: 40ch; }
-  .since { margin-top: 6px; color: var(--ink-3); font-size: 13px; }
+  .summary { margin-top: 12px; color: var(--ink-2); font-size: 15px; max-width: 42ch; }
 
-  section { margin-top: 30px; }
+  .qstrip { margin-top: 18px; width: 100%; }
+  .qstrip-bars { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; }
+  .qstrip-bars span { height: 22px; border-radius: 3px; background: var(--track); }
+  .qstrip-bars .p1 { background: var(--p1); } .qstrip-bars .p2 { background: var(--p2); }
+  .qstrip-bars .p3 { background: var(--p3); } .qstrip-bars .p0 { background: var(--p0); opacity: 0.45; }
+  .qstrip-axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-3); margin-top: 5px; }
+  .legend { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--ink-3); justify-content: center; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+
+  section { margin-top: 28px; }
   section > h2 { font-size: 17px; font-weight: 700; letter-spacing: -0.005em; }
   section > .lede { margin-top: 4px; font-size: 14px; color: var(--ink-3); }
+  .card { background: var(--surface); border-radius: 12px; }
 
-  /* --- Why semis are moving ------------------------------------------- */
-  .diagnosis {
-    margin-top: 12px; font-size: 17px; line-height: 1.45; font-weight: 500;
-    padding-left: 14px; border-left: 3px solid var(--accent);
-  }
-  .drivers { margin-top: 16px; display: grid; gap: 10px; }
-  .driver { background: var(--surface); border-radius: 12px; padding: 14px 14px 12px; }
+  /* checklist */
+  .checks { margin-top: 12px; display: grid; gap: 8px; }
+  details.check > summary { list-style: none; cursor: pointer; padding: 13px 14px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; }
+  details.check > summary::-webkit-details-marker { display: none; }
+  .num { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700; background: var(--unknown-soft); color: var(--ink-2); }
+  .check.met .num { background: var(--pc); color: var(--surface); }
+  .check-title { font-weight: 600; font-size: 15px; }
+  .check-sub { display: block; font-size: 12.5px; color: var(--ink-3); }
+  .verdict { font-size: 12.5px; font-weight: 700; color: var(--ink-3); white-space: nowrap; }
+  .check.met .verdict { color: var(--pc); }
+  .conds { list-style: none; margin: 0; padding: 0 14px 10px; }
+  .conds li { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; padding: 8px 0; border-top: 1px solid var(--rule); font-size: 14px; }
+  .mark { font-weight: 700; text-align: center; }
+  .mark.yes { color: var(--low); } .mark.no { color: var(--ink-3); } .mark.unk { color: var(--moderate); }
+  .c-threshold { display: block; font-size: 12.5px; color: var(--ink-3); }
+  .c-value { font-weight: 600; text-align: right; }
+  summary:focus-visible, a:focus-visible { outline: 2px solid var(--p1); outline-offset: 2px; border-radius: 12px; }
+
+  /* catalysts */
+  .cats { margin-top: 12px; padding: 2px 14px; }
+  .cat { padding: 12px 0; border-top: 1px solid var(--rule); }
+  .cat:first-child { border-top: 0; }
+  .cat-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+  .cat-name { font-weight: 600; font-size: 15px; }
+  .cat-detail { margin-top: 3px; font-size: 13.5px; color: var(--ink-2); }
+  .status { font-size: 12.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; background: var(--unknown-soft); color: var(--unknown); }
+  .status.yes { background: var(--low-soft); color: var(--low); }
+  .status.starting { background: var(--moderate-soft); color: var(--moderate); }
+  .status.not-yet { background: var(--unknown-soft); color: var(--ink-2); }
+
+  /* cycle metrics */
+  .metrics-card { margin-top: 12px; padding: 2px 14px; }
+  .cm { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 12px 0; border-top: 1px solid var(--rule); align-items: center; }
+  .cm:first-child { border-top: 0; }
+  .cm-name { font-weight: 600; font-size: 14.5px; }
+  .cm-members { display: block; font-size: 12px; color: var(--ink-3); font-weight: 400; }
+  .cm-value { text-align: right; font-weight: 700; font-size: 17px; }
+  .cm-prev { display: block; font-size: 12px; color: var(--ink-3); font-weight: 500; }
+  .spark { grid-column: 1 / -1; width: 100%; height: 34px; margin-top: 4px; }
+  .spark path { fill: none; stroke: var(--p1); stroke-width: 1.8; }
+  .spark .zero { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 3; }
+  .spark circle { fill: var(--p1); }
+  .spark-axis { grid-column: 1 / -1; display: flex; justify-content: space-between; font-size: 11.5px; color: var(--ink-3); }
+
+  /* --- Today -------------------------------------------------------------------------- */
+  .stress { margin-top: 10px; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: center; padding: 14px; }
+  .stress-badge { grid-row: span 2; font-size: 15px; font-weight: 700; padding: 8px 14px; border-radius: 10px; background: var(--s-soft); color: var(--s); }
+  .stress-why { font-size: 14px; color: var(--ink-2); }
+  .stress-note { font-size: 12.5px; color: var(--ink-3); }
+  .diagnosis { margin-top: 14px; font-size: 16.5px; line-height: 1.45; font-weight: 500; padding-left: 14px; border-left: 3px solid var(--s); }
+  .backdrop { margin-top: 10px; font-size: 14px; color: var(--ink-2); }
+  .backdrop b { font-weight: 600; color: var(--ink); }
+  .overnight { margin-top: 12px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .on-item { padding: 10px 12px; }
+  .on-label { font-size: 12.5px; color: var(--ink-3); }
+  .on-value { font-weight: 700; font-size: 15px; }
+  .on-chg { font-size: 13px; font-weight: 600; }
+  .up { color: var(--low); } .down { color: var(--high); } .flat { color: var(--ink-3); }
+  .on-date { display: block; font-size: 11.5px; color: var(--ink-3); }
+  .drivers { margin-top: 12px; display: grid; gap: 10px; }
+  .driver { padding: 14px 14px 12px; }
   .driver-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
   .driver-name { font-weight: 600; font-size: 16px; }
   .driver-asks { font-size: 13.5px; color: var(--ink-3); margin-top: 2px; }
@@ -114,90 +186,65 @@
   .state.QUIET { background: var(--low-soft); color: var(--low); }
   .state.UNKNOWN { background: var(--unknown-soft); color: var(--unknown); }
   .metrics { margin: 10px 0 0; padding: 0; list-style: none; }
-  .metrics li {
-    display: grid; grid-template-columns: 1fr auto; column-gap: 12px;
-    padding: 7px 0; border-top: 1px solid var(--rule); font-size: 14px;
-  }
-  .metrics .m-label { color: var(--ink-2); }
-  .metrics .m-value { font-weight: 600; text-align: right; }
-  .metrics .m-value.hit { color: var(--high); }
-  .metrics .m-trigger { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink-3); }
+  .metrics li { display: grid; grid-template-columns: 1fr auto; column-gap: 12px; padding: 7px 0; border-top: 1px solid var(--rule); font-size: 14px; }
+  .m-label { color: var(--ink-2); }
+  .m-value { font-weight: 600; text-align: right; }
+  .m-value.hit { color: var(--high); }
+  .m-trigger { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink-3); }
+  .m-prelim { grid-column: 1 / -1; font-size: 12.5px; color: var(--moderate); }
 
-  /* --- Phase rules ---------------------------------------------------- */
-  .rules { margin-top: 12px; display: grid; gap: 8px; }
-  details.rule { background: var(--surface); border-radius: 12px; }
-  details.rule > summary {
-    list-style: none; cursor: pointer; padding: 13px 14px;
-    display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
-  }
-  details.rule > summary::-webkit-details-marker { display: none; }
-  .rule-num {
-    width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
-    font-size: 13px; font-weight: 700; background: var(--unknown-soft); color: var(--ink-2);
-  }
-  .rule.fired .rule-num { background: var(--accent); color: var(--surface); }
-  .rule-title { font-weight: 600; font-size: 15px; line-height: 1.3; }
-  .rule-logic { font-size: 12.5px; color: var(--ink-3); font-weight: 500; }
-  .verdict { font-size: 12.5px; font-weight: 700; color: var(--ink-3); }
-  .rule.fired .verdict { color: var(--accent); }
-  .conds { list-style: none; margin: 0; padding: 0 14px 10px; }
-  .conds li { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; padding: 8px 0; border-top: 1px solid var(--rule); font-size: 14px; }
-  .mark { font-weight: 700; text-align: center; }
-  .mark.yes { color: var(--low); }
-  .mark.no { color: var(--ink-3); }
-  .mark.unk { color: var(--moderate); }
-  .c-name { color: var(--ink); }
-  .c-threshold { display: block; font-size: 12.5px; color: var(--ink-3); }
-  .c-value { font-weight: 600; text-align: right; }
-  .c-note { display: block; font-size: 12.5px; color: var(--moderate); }
-  details.rule > summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 12px; }
+  /* tally */
+  .tally-bar { margin-top: 12px; display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--track); }
+  .tally-bar span { display: block; height: 100%; }
+  .t-rates { background: var(--rates); } .t-fear { background: var(--high); } .t-chips { background: var(--moderate); } .t-unknown { background: var(--unknown); }
+  .tally-legend { margin-top: 8px; display: grid; gap: 4px; font-size: 13.5px; }
+  .tally-legend div { display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: center; }
+  .tally-legend i { width: 10px; height: 10px; border-radius: 2px; }
+  .tally-legend b { font-weight: 700; }
+  .tally-summary { margin-top: 10px; font-size: 14px; color: var(--ink-2); }
+  .tally-days { margin-top: 10px; padding: 2px 14px; }
+  .tday { display: grid; grid-template-columns: 1fr auto; gap: 1px 10px; padding: 9px 0; border-top: 1px solid var(--rule); font-size: 14px; }
+  .tday:first-child { border-top: 0; }
+  .tday-move { font-weight: 700; color: var(--high); text-align: right; }
+  .tday-detail { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink-3); }
+  .tag { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; margin-left: 6px; color: var(--surface); }
+  details.more > summary { cursor: pointer; font-size: 13.5px; color: var(--ink-2); font-weight: 600; margin-top: 10px; }
 
-  /* --- Telemetry ------------------------------------------------------ */
-  .signals { margin-top: 12px; background: var(--surface); border-radius: 12px; padding: 2px 14px; }
+  /* signals, inputs, filings */
+  .signals { margin-top: 12px; padding: 2px 14px; }
   .signal { display: grid; grid-template-columns: 10px 1fr auto; gap: 10px; align-items: baseline; padding: 11px 0; border-top: 1px solid var(--rule); }
   .signal:first-child { border-top: 0; }
   .signal .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--track); transform: translateY(-1px); }
   .signal.on .dot { background: var(--high); }
   .signal.unk .dot { background: transparent; border: 1.5px solid var(--unknown); }
+  .signal.good .dot { background: var(--low); }
   .s-name { font-size: 14.5px; font-weight: 500; }
   .s-sub { display: block; font-size: 12.5px; color: var(--ink-3); }
   .s-sub b { font-weight: 600; color: var(--high); }
-  .signal.good .dot { background: var(--low); }
   .signal.good .s-sub b { color: var(--low); }
   .s-value { font-weight: 600; font-size: 14.5px; text-align: right; }
-
-  /* --- History -------------------------------------------------------- */
-  .strip { margin-top: 12px; display: grid; grid-template-columns: repeat(30, 1fr); gap: 3px; }
-  .strip span { height: 28px; border-radius: 3px; background: var(--track); }
-  .strip span.p1 { background: var(--moderate); }
-  .strip span.p2 { background: var(--high); }
-  .strip span.p3, .strip span.p4 { background: var(--low); }
-  .strip span.p0 { background: var(--unknown); opacity: 0.45; }
-  .strip-axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-3); margin-top: 6px; }
-  .changes { margin: 12px 0 0; padding: 0; list-style: none; font-size: 14px; }
-  .changes li { padding: 7px 0; border-top: 1px solid var(--rule); display: flex; justify-content: space-between; gap: 12px; }
-  .changes .when { color: var(--ink-3); white-space: nowrap; }
-
-  .notice { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: 14px; background: var(--moderate-soft); border-left: 3px solid var(--moderate); }
-  .notice.bad { background: var(--high-soft); border-left-color: var(--high); }
-  .notice ul { margin: 6px 0 0; padding-left: 18px; }
-  .quality-ok { margin-top: 8px; font-size: 13px; color: var(--ink-3); display: flex; gap: 6px; align-items: center; }
-  .quality-ok::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--low); }
-  .backdrop { margin-top: 10px; font-size: 14px; color: var(--ink-2); }
-  .backdrop b { font-weight: 600; color: var(--ink); }
-  .m-date { color: var(--ink-3); }
-  .m-prelim { grid-column: 1 / -1; font-size: 12.5px; color: var(--moderate); }
-  .inputs { margin-top: 12px; background: var(--surface); border-radius: 12px; padding: 2px 14px; }
+  .inputs { margin-top: 12px; padding: 2px 14px; }
   .input { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 11px 0; border-top: 1px solid var(--rule); }
   .input:first-child { border-top: 0; }
   .i-name { font-size: 14.5px; font-weight: 500; }
   .i-value { font-weight: 600; font-size: 14.5px; text-align: right; }
   .i-meta { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink-3); }
   .badge { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; margin-right: 6px; }
-  .badge.VERIFIED { background: var(--low-soft); color: var(--low); }
+  .badge.VERIFIED, .badge.FILED { background: var(--low-soft); color: var(--low); }
   .badge.OFFICIAL { background: var(--unknown-soft); color: var(--ink-2); }
-  .badge.CONFLICT, .badge.MISSING, .badge.UNCONFIRMED { background: var(--high-soft); color: var(--high); }
+  .badge.CONFLICT, .badge.MISSING, .badge.UNCONFIRMED, .badge.FAILED { background: var(--high-soft); color: var(--high); }
   .badge.STALE { background: var(--moderate-soft); color: var(--moderate); }
+  .filings { margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+  .filing { padding: 8px 10px; font-size: 12.5px; color: var(--ink-3); }
+  .filing b { color: var(--ink); font-size: 13.5px; }
+  h3.sub { margin-top: 18px; font-size: 14.5px; font-weight: 700; }
+
+  .strip { margin-top: 12px; display: grid; grid-template-columns: repeat(30, 1fr); gap: 3px; }
+  .strip span { height: 24px; border-radius: 3px; background: var(--track); }
+  .strip .CALM { background: var(--low); } .strip .ELEVATED { background: var(--moderate); }
+  .strip .STRESSED { background: var(--high); } .strip .old { background: var(--unknown); opacity: 0.35; }
+  .strip-axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-3); margin-top: 6px; }
+
   footer { margin-top: 34px; font-size: 13px; color: var(--ink-3); display: grid; gap: 8px; }
   footer ul { margin: 0; padding-left: 18px; }
   .error { margin-top: 40px; padding: 16px; background: var(--surface); border-radius: 12px; }
@@ -212,9 +259,12 @@
 </head>
 <body>
 <main id="app" aria-live="polite">
-  <header class="masthead">
-    <h1>Market regime</h1>
-    <p class="updated" id="updated">Loading…</p>
+  <header>
+    <div class="masthead">
+      <h1>Market regime</h1>
+      <p class="updated" id="updated">Loading…</p>
+    </div>
+    <p class="dataline" id="dataline"></p>
   </header>
   <div class="stale" id="stale" hidden></div>
   <div class="notice bad" id="missed" hidden></div>
@@ -222,48 +272,83 @@
   <p class="quality-ok" id="quality-ok" hidden></p>
 
   <div id="content" hidden>
+    <p class="layer"><span>The cycle</span><span>moves quarterly, from company filings</span></p>
     <div class="hero">
-      <svg class="dial" id="dial" viewBox="0 0 320 236" role="img"></svg>
+      <svg class="dial" id="dial" viewBox="-30 0 380 262" role="img"></svg>
       <h2 class="phase-name" id="phase-name"></h2>
       <div class="phase-meta" id="phase-meta"></div>
       <p class="summary" id="summary"></p>
-      <p class="since" id="since"></p>
+      <div class="qstrip" id="qstrip" hidden>
+        <div class="qstrip-bars" id="qstrip-bars"></div>
+        <div class="qstrip-axis"><span id="qstrip-start"></span><span id="qstrip-end"></span></div>
+        <div class="legend"><span><i style="background:var(--p1)"></i>Buildout</span><span><i style="background:var(--p2)"></i>Digestion</span><span><i style="background:var(--p3)"></i>Monetization</span><span><i style="background:var(--p0);opacity:.45"></i>Between</span></div>
+      </div>
     </div>
 
     <section>
-      <h2>Why semis are moving</h2>
-      <p class="diagnosis" id="diagnosis"></p>
-      <p class="backdrop" id="backdrop" hidden></p>
-      <div class="drivers" id="drivers"></div>
+      <h2>Phase checklist</h2>
+      <p class="lede" id="checks-lede"></p>
+      <div class="checks" id="checks"></div>
     </section>
 
     <section>
-      <h2>Phase rules</h2>
-      <p class="lede">Checked in order 2, 4, 1, 3. The first rule that passes sets the phase.</p>
-      <div class="rules" id="rules"></div>
+      <h2>How we go up</h2>
+      <p class="lede">The three things that end the "valuations questioned" loop.</p>
+      <div class="card cats" id="catalysts"></div>
+    </section>
+
+    <section>
+      <h2>The numbers behind the cycle</h2>
+      <p class="lede">Trailing-twelve-month growth, year over year, by calendar quarter.</p>
+      <div class="card metrics-card" id="cycle-metrics"></div>
+    </section>
+
+    <p class="layer"><span>Today</span><span>moves daily, from market data</span></p>
+    <div class="card stress" id="stress"></div>
+    <p class="diagnosis" id="diagnosis"></p>
+    <p class="backdrop" id="backdrop" hidden></p>
+    <div class="overnight" id="overnight"></div>
+    <details class="more">
+      <summary>The three daily drivers</summary>
+      <div class="drivers" id="drivers"></div>
+    </details>
+
+    <section>
+      <h2>Is it a scapegoat?</h2>
+      <p class="lede">What else moved on each recent semis sell-off.</p>
+      <div class="tally-bar" id="tally-bar"></div>
+      <div class="tally-legend" id="tally-legend"></div>
+      <p class="tally-summary" id="tally-summary"></p>
+      <details class="more" id="tally-more">
+        <summary>Each day</summary>
+        <div class="card tally-days" id="tally-days"></div>
+      </details>
     </section>
 
     <section>
       <h2>Signals</h2>
-      <div class="signals" id="signals"></div>
+      <p class="lede">Context, including the overseas and dollar telemetry. None of these set the phase.</p>
+      <div class="card signals" id="signals"></div>
+    </section>
+
+    <section id="history-section" hidden>
+      <h2>Daily stress, recent reads</h2>
+      <div class="strip" id="strip" aria-hidden="true"></div>
+      <div class="strip-axis"><span id="strip-start"></span><span>latest</span></div>
     </section>
 
     <section>
       <h2>Where every number comes from</h2>
       <p class="lede">Verified means an independent source agrees on the same date. Official means it comes straight from the source of record. A number that fails a check is withheld, never guessed.</p>
-      <div class="inputs" id="inputs"></div>
-    </section>
-
-    <section id="history-section" hidden>
-      <h2>Recent reads</h2>
-      <div class="strip" id="strip" aria-hidden="true"></div>
-      <div class="strip-axis"><span id="strip-start"></span><span>latest</span></div>
-      <ul class="changes" id="changes"></ul>
+      <div class="card inputs" id="inputs"></div>
+      <h3 class="sub">Company filings (SEC EDGAR)</h3>
+      <p class="lede" id="filings-lede"></p>
+      <div class="filings" id="filings"></div>
     </section>
 
     <footer>
       <ul id="notes"></ul>
-      <p>Updates weekdays at 6:00 AM (prior US session plus the overnight Korea session) and 4:25 PM ET. Rule-based read of official market data. Thresholds are not yet backtested. Not a trading signal.</p>
+      <p>Updates weekdays at 6:00 AM (prior US session plus the overnight Korea session) and 4:25 PM ET. Filings are re-read once a day; the cycle changes only when companies report. Thresholds are not yet backtested. Not a trading signal.</p>
     </footer>
   </div>
 
@@ -275,38 +360,41 @@
 
 <script>
 (() => {
-  const RISK = {
-    HIGH: ["var(--high)", "var(--high-soft)"],
-    MODERATE: ["var(--moderate)", "var(--moderate-soft)"],
-    LOW: ["var(--low)", "var(--low-soft)"],
-    UNDETERMINED: ["var(--unknown)", "var(--unknown-soft)"],
+  const PHASE = { 1: "Buildout", 2: "Digestion", 3: "Monetization" };
+  const PCOLOR = (id) => [`var(--p${id})`, `var(--p${id}-soft)`];
+  const STRESS = {
+    CALM: ["var(--low)", "var(--low-soft)"], ELEVATED: ["var(--moderate)", "var(--moderate-soft)"],
+    STRESSED: ["var(--high)", "var(--high-soft)"], UNKNOWN: ["var(--unknown)", "var(--unknown-soft)"],
   };
-  const SHORT = { 1: "Buildout", 2: "Squeeze", 3: "Monetization", 4: "Easing" };
-  const CONFIDENCE = {
-    FULL: "All rule inputs present",
-    PARTIAL: "Partial evidence",
-    PROVISIONAL: "Provisional, data missing",
+  const STRESS_NOTE = {
+    CALM: "No same-day driver fired. A drop today would be chip-specific.",
+    ELEVATED: "One same-day driver fired.",
+    STRESSED: "Two or more drivers fired, or VIX is above 30.",
+    UNKNOWN: "Today's drivers couldn't be checked.",
   };
+  const TALLY = { rates: ["t-rates", "Yield jump"], fear: ["t-fear", "Market-wide volatility spike"], chips: ["t-chips", "Neither: chip-specific"], unknown: ["t-unknown", "Unknown (data missing)"] };
+  const CAT_TEXT = { yes: "Yes", starting: "Starting", "not yet": "Not yet", unknown: "Unknown" };
   const SCHEDULE_NY = ["06:00", "16:25"];  // mirrors meridian-clock schedule.json
   const GRACE_MINUTES = 60;
   const STATUS_TEXT = { VERIFIED: "Verified", OFFICIAL: "Official", CONFLICT: "Withheld", UNCONFIRMED: "Withheld", MISSING: "Unavailable" };
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const nyTime = (iso, opts) => new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", ...opts });
+  const dayLabel = (iso) => iso ? new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }) : "";
+  const fullDate = (iso) => iso ? new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" }) : "";
+  const signed = (v, d = 1) => `${v >= 0 ? "+" : ""}${v.toFixed(d)}`;
 
   function fmt(value, unit) {
     if (value === null || value === undefined) return "n/a";
     if (typeof value === "boolean") return value ? "yes" : "no";
     switch (unit) {
       case "%": return `${value.toFixed(2)}%`;
-      case "chg": return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
-      case "bps": return `${value >= 0 ? "+" : ""}${value.toFixed(1)} bps`;
-      case "z": return `${value >= 0 ? "+" : ""}${value.toFixed(2)}σ`;
+      case "chg": return `${signed(value)}%`;
+      case "bps": return `${signed(value)} bps`;
+      case "z": return `${signed(value, 2)}σ`;
       default: return value.toFixed(1);
     }
   }
-
-  const dayLabel = (iso) => iso ? new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }) : "";
 
   function nyParts(date) {
     const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
@@ -315,19 +403,30 @@
     }).formatToParts(date).map((p) => [p.type, p.value]));
     return { ymd: `${parts.year}-${parts.month}-${parts.day}`, minutes: Number(parts.hour) * 60 + Number(parts.minute), weekday: parts.weekday };
   }
+  const slotMinutes = () => SCHEDULE_NY.map((t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3)));
+  const clock = (m) => `${Math.floor(m / 60) % 12 || 12}:${String(m % 60).padStart(2, "0")} ${m < 720 ? "AM" : "PM"}`;
 
   // The most recent scheduled run that should have published by now (weekdays, NY time).
   function lastExpectedRun(now) {
     for (let back = 0; back < 7; back++) {
-      const probe = new Date(now.getTime() - back * 86400000);
-      const p = nyParts(probe);
+      const p = nyParts(new Date(now.getTime() - back * 86400000));
       if (p.weekday === "Sat" || p.weekday === "Sun") continue;
-      const slots = SCHEDULE_NY.map((t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3))).sort((a, b) => b - a);
-      for (const slot of slots) {
+      for (const slot of slotMinutes().sort((a, b) => b - a)) {
         if (back > 0 || slot + GRACE_MINUTES <= p.minutes) return { ymd: p.ymd, minutes: slot };
       }
     }
     return null;
+  }
+
+  function nextRun(now) {
+    for (let ahead = 0; ahead < 8; ahead++) {
+      const p = nyParts(new Date(now.getTime() + ahead * 86400000));
+      if (p.weekday === "Sat" || p.weekday === "Sun") continue;
+      for (const slot of slotMinutes().sort((a, b) => a - b)) {
+        if (ahead > 0 || slot > p.minutes) return `${ahead === 0 ? "today" : ahead === 1 ? "tomorrow" : p.weekday} ${clock(slot)} ET`;
+      }
+    }
+    return "";
   }
 
   function missedRun(asOfIso) {
@@ -337,123 +436,185 @@
     const readKey = `${read.ymd} ${String(read.minutes).padStart(4, "0")}`;
     const expKey = `${expected.ymd} ${String(expected.minutes).padStart(4, "0")}`;
     if (readKey >= expKey) return null;
-    const hh = Math.floor(expected.minutes / 60), mm = String(expected.minutes % 60).padStart(2, "0");
-    const label = `${hh % 12 || 12}:${mm} ${hh < 12 ? "AM" : "PM"}`;
-    return `The ${label} update on ${dayLabel(expected.ymd)} didn't publish. You're looking at an older read; check the regime-engine Actions tab or Pheme in Discord.`;
+    return `The ${clock(expected.minutes)} update on ${dayLabel(expected.ymd)} didn't publish. You're looking at an older read; check the regime-engine Actions tab or Pheme in Discord.`;
   }
 
-  function guessUnit(name) {
-    if (/percentile/i.test(name)) return "pctile";
-    if (/\(%\)|yield level/i.test(name)) return "%";
-    if (/bps/i.test(name)) return "bps";
-    if (/z-score/i.test(name)) return "z";
-    if (/\(pp\)/i.test(name)) return "pp";
-    return "";
-  }
-
-  function fmtCondition(value, name) {
-    if (value === null || value === undefined) return "n/a";
-    if (typeof value === "boolean") return value ? "yes" : "no";
-    const unit = guessUnit(name);
-    if (unit === "pp") return `${value >= 0 ? "+" : ""}${value.toFixed(2)} pp`;
-    if (name === "DXY") return value.toFixed(2);
-    if (unit === "pctile") return `${Math.round(value)}th pct`;
-    return fmt(value, unit);
-  }
-
-  function drawDial(status) {
-    // Four arcs = the four-phase cycle, clockwise from 12 o'clock. Labels sit outside the ring.
+  // --- The cycle -----------------------------------------------------------------------------
+  function drawDial(cycle) {
+    // Three arcs, clockwise from the top: Buildout -> Digestion -> Monetization.
     const svg = $("dial");
-    const cx = 160, cy = 118, r = 84, gapDeg = 6, labelR = r + 24;
-    const polar = (deg, rad) => {
-      const a = (deg - 90) * Math.PI / 180;
-      return [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
-    };
+    const cx = 160, cy = 142, r = 82, gapDeg = 8, labelR = r + 22;
+    const polar = (deg, rad) => { const a = (deg - 90) * Math.PI / 180; return [cx + rad * Math.cos(a), cy + rad * Math.sin(a)]; };
+    const met = new Set(cycle.phases_met || []);
     let out = "";
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
       const phase = i + 1;
-      const start = i * 90 + gapDeg / 2, end = (i + 1) * 90 - gapDeg / 2;
+      const start = i * 120 - 60 + gapDeg / 2, end = (i + 1) * 120 - 60 - gapDeg / 2;
       const [x1, y1] = polar(start, r), [x2, y2] = polar(end, r);
-      const on = status.phase_id === phase;
+      const on = cycle.known && cycle.phase_id === phase;
+      const also = !on && met.has(phase);
       const len = (Math.PI * 2 * r) * ((end - start) / 360);
-      out += `<path class="seg${on ? " on" : ""}" d="M${x1.toFixed(2)} ${y1.toFixed(2)} A${r} ${r} 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)}" style="stroke-dasharray:${len};--len:${len}"/>`;
+      out += `<path class="seg${on ? " on" : also ? " also" : ""}" style="--also:var(--p${phase});stroke-dasharray:${len};--len:${len}" d="M${x1.toFixed(2)} ${y1.toFixed(2)} A${r} ${r} 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)}"/>`;
       const mid = (start + end) / 2;
-      const [tx, ty] = polar(mid, labelR);
-      const anchor = tx > cx ? "start" : "end";
-      out += `<text x="${tx.toFixed(1)}" y="${(ty - 8).toFixed(1)}" text-anchor="${anchor}" class="seg-num${on ? " on" : ""}">${phase}</text>`;
-      out += `<text x="${tx.toFixed(1)}" y="${(ty + 8).toFixed(1)}" text-anchor="${anchor}" class="seg-label${on ? " on" : ""}">${SHORT[phase]}</text>`;
+      let [tx, ty] = polar(mid, labelR);
+      const anchor = Math.abs(tx - cx) < 12 ? "middle" : tx > cx ? "start" : "end";
+      if (anchor === "middle") ty -= 10;
+      out += `<text x="${tx.toFixed(1)}" y="${(ty - 7).toFixed(1)}" text-anchor="${anchor}" class="seg-num${on ? " on" : ""}">${phase}</text>`;
+      out += `<text x="${tx.toFixed(1)}" y="${(ty + 8).toFixed(1)}" text-anchor="${anchor}" class="seg-label${on ? " on" : ""}">${PHASE[phase]}</text>`;
     }
-    const core = status.phase_id === 0 ? "–" : String(status.phase_id);
+    const core = cycle.known && cycle.phase_id ? String(cycle.phase_id) : "–";
     out += `<text class="core-num" x="${cx}" y="${cy - 2}" text-anchor="middle" dominant-baseline="middle">${core}</text>`;
-    out += `<text class="core-sub" x="${cx}" y="${cy + 36}" text-anchor="middle">${status.phase_id === 0 ? "no phase" : "phase"}</text>`;
+    out += `<text class="core-sub" x="${cx}" y="${cy + 34}" text-anchor="middle">${cycle.known ? (cycle.phase_id ? "phase" : "between phases") : "unknown"}</text>`;
     svg.innerHTML = out;
-    svg.setAttribute("aria-label", `Current phase: ${status.phase}`);
+    svg.setAttribute("aria-label", `Cycle phase: ${cycle.phase}`);
   }
 
-  function phaseSince(status, history) {
-    if (!history.length) return "";
-    let i = history.length - 1;
-    if (history[i].phase_id !== status.phase_id) return "";
-    while (i > 0 && history[i - 1].phase_id === status.phase_id) i--;
-    const reads = history.length - i;
-    const start = nyTime(history[i].as_of, { month: "short", day: "numeric" });
-    return reads > 1 ? `Same call since ${start}, ${reads} reads in a row` : "New call as of this read";
+  function renderCycle(cycle) {
+    const id = cycle.known ? cycle.phase_id : 0;
+    const [accent, soft] = PCOLOR(id);
+    document.documentElement.style.setProperty("--accent", accent);
+    document.documentElement.style.setProperty("--accent-soft", soft);
+    drawDial(cycle);
+    const also = (cycle.phases_met || []).filter((p) => p !== cycle.phase_id).map((p) => PHASE[p]);
+    $("phase-name").textContent = cycle.known ? (also.length ? `${cycle.phase} (${also.join(", ")} still on)` : cycle.phase) : "Not enough filings yet";
+    const pills = [];
+    if (cycle.known && cycle.since) {
+      const n = cycle.quarters_in_phase;
+      pills.push(`<span class="pill accent"><span class="dot"></span>Since ${esc(cycle.since)} · ${cycle.confirmed ? `confirmed, ${n} quarters` : "new, not yet confirmed"}</span>`);
+    }
+    if (cycle.through) pills.push(`<span class="pill">Filings through ${esc(cycle.through)}</span>`);
+    $("phase-meta").innerHTML = pills.join("");
+    $("summary").textContent = cycle.summary;
+
+    const hist = cycle.history || [];
+    if (hist.length) {
+      $("qstrip").hidden = false;
+      $("qstrip-bars").innerHTML = hist.map((h) => `<span class="p${h.phase_id}" title="${esc(h.quarter)}: ${esc(PHASE[h.phase_id] || "Between phases")}"></span>`).join("");
+      $("qstrip-start").textContent = hist[0].quarter;
+      $("qstrip-end").textContent = hist[hist.length - 1].quarter;
+    }
+
+    $("checks-lede").textContent = cycle.through
+      ? `Checked against ${cycle.through} filings. Buildout and Digestion can't both hold; Monetization can overlap either.`
+      : "Waiting for filings.";
+    const order = [1, 2, 3];
+    $("checks").innerHTML = order.map((pid) => {
+      const c = (cycle.checks || []).find((x) => x.phase_id === pid);
+      if (!c) return "";
+      const metCount = c.conditions.filter((x) => x.met === true).length;
+      const verdict = c.met === true ? (pid === cycle.phase_id ? "Met: current phase" : "Met") : c.met === false ? `${metCount} of ${c.conditions.length}` : "Can't tell";
+      const conds = c.conditions.map((x) => {
+        const mark = x.met === true ? ["yes", "✓"] : x.met === false ? ["no", "✕"] : ["unk", "?"];
+        const value = x.unit === "%" && x.value !== null && x.value !== undefined ? `${x.value.toFixed(1)}%` : "";
+        return `<li><span class="mark ${mark[0]}" aria-label="${mark[0]}">${mark[1]}</span>
+          <span>${esc(x.name)}<span class="c-threshold">${x.unit === "%" ? "needs " : ""}${esc(x.threshold)}</span></span>
+          <span class="c-value">${esc(value)}</span></li>`;
+      }).join("");
+      return `<details class="check card${c.met === true ? " met" : ""}" style="--pc:var(--p${pid})"${pid === cycle.phase_id || c.met === true ? " open" : ""}>
+        <summary><span class="num">${pid}</span>
+          <span><span class="check-title">${esc(c.name)}</span><span class="check-sub">${pid === 1 ? "Hardware leads: spending and chip revenue accelerating" : pid === 2 ? "Still spending, but growth has peaked" : "AI spend turning into software revenue"}</span></span>
+          <span class="verdict">${verdict}</span></summary>
+        <ul class="conds">${conds}</ul></details>`;
+    }).join("");
+
+    $("catalysts").innerHTML = (cycle.catalysts || []).map((c) => `
+      <div class="cat"><div class="cat-head"><span class="cat-name">${esc(c.label)}</span>
+        <span class="status ${esc(c.status.replace(" ", "-"))}">${esc(CAT_TEXT[c.status] || c.status)}</span></div>
+        <p class="cat-detail">${esc(c.detail)}</p></div>`).join("");
+
+    $("cycle-metrics").innerHTML = (cycle.metrics || []).map((m) => {
+      const h = m.history || [];
+      return `<div class="cm">
+        <span class="cm-name">${esc(m.label)}<span class="cm-members">${esc(m.members.join(", "))}</span></span>
+        <span class="cm-value">${m.latest === null ? "n/a" : `${signed(m.latest)}%`}<span class="cm-prev">${m.previous === null ? "" : `prior quarter ${signed(m.previous)}%`}</span></span>
+        ${h.length > 1 ? spark(h) : ""}
+        ${h.length > 1 ? `<div class="spark-axis"><span>${esc(h[0].quarter)}</span><span>${esc(h[h.length - 1].quarter)}</span></div>` : ""}
+      </div>`;
+    }).join("");
+
+    const filings = cycle.filings || [];
+    const ok = filings.filter((f) => f.ok).length;
+    $("filings-lede").textContent = `${ok} of ${filings.length} companies read${cycle.fetched_at ? `, checked ${nyTime(cycle.fetched_at, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} ET` : ""}. Each company's own 10-Q and 10-K figures, mapped to calendar quarters.`;
+    $("filings").innerHTML = filings.map((f) => `<div class="filing card"><b>${esc(f.ticker)}</b> <span class="badge ${f.ok ? "FILED" : "FAILED"}">${f.ok ? "Read" : "Missing"}</span><br>
+      ${f.ok ? `quarter to ${esc(fullDate(f.latest_period_end))}${f.filed ? `, filed ${esc(fullDate(f.filed))}` : ""}` : esc(f.error || "")}</div>`).join("");
+  }
+
+  function spark(points) {
+    const w = 300, h = 34, pad = 3;
+    const vals = points.map((p) => p.value);
+    const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+    const x = (i) => pad + (w - 2 * pad) * (i / (vals.length - 1));
+    const y = (v) => h - pad - (h - 2 * pad) * ((v - lo) / ((hi - lo) || 1));
+    const d = vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
+    const last = vals.length - 1;
+    return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
+      <line class="zero" x1="0" x2="${w}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/><path d="${d}"/>
+      <circle cx="${x(last).toFixed(1)}" cy="${y(vals[last]).toFixed(1)}" r="2.6"/></svg>`;
+  }
+
+  // --- Today ---------------------------------------------------------------------------------
+  function renderToday(status) {
+    const today = status.today;
+    const level = (today && today.stress.level) || "UNKNOWN";
+    const [s, soft] = STRESS[level] || STRESS.UNKNOWN;
+    document.documentElement.style.setProperty("--s", s);
+    document.documentElement.style.setProperty("--s-soft", soft);
+    const reasons = (today && today.stress.reasons) || [];
+    $("stress").innerHTML = `<span class="stress-badge">${esc((today && today.stress.label) || "Unknown")}</span>
+      <span class="stress-why">${reasons.length ? esc(reasons.join("; ")) : "Nothing pushing on the market today."}</span>
+      <span class="stress-note">${esc(STRESS_NOTE[level])}</span>`;
+    $("diagnosis").textContent = status.diagnosis || "No diagnosis in this snapshot.";
+    if (status.backdrop) { $("backdrop").hidden = false; $("backdrop").innerHTML = `<b>Backdrop:</b> ${esc(status.backdrop)}`; }
+    $("overnight").innerHTML = ((today && today.overnight) || []).map((o) => {
+      const cls = o.change_pct === null ? "flat" : o.change_pct > 0.05 ? "up" : o.change_pct < -0.05 ? "down" : "flat";
+      const value = o.value === null ? "n/a" : o.value >= 1000 ? Math.round(o.value).toLocaleString("en-US") : o.value.toFixed(2);
+      return `<div class="on-item card"><div class="on-label">${esc(o.label)}</div>
+        <div class="on-value">${esc(value)} <span class="on-chg ${cls}">${o.change_pct === null ? "" : `${signed(o.change_pct, 2)}%`}</span></div>
+        <span class="on-date">${o.date ? esc(dayLabel(o.date)) : "unavailable"}</span></div>`;
+    }).join("");
+    renderDrivers(status.drivers || []);
   }
 
   function renderDrivers(drivers) {
     $("drivers").innerHTML = drivers.map((d) => `
-      <article class="driver">
+      <article class="driver card">
         <div class="driver-head">
           <div><h3 class="driver-name">${esc(d.name)}</h3><p class="driver-asks">${esc(d.asks)}</p></div>
           <span class="state ${esc(d.state)}">${d.state === "ACTIVE" ? "Active" : d.state === "QUIET" ? "Quiet" : "No data"}</span>
         </div>
         <ul class="metrics">${d.metrics.map((m) => `
-          <li>
-            <span class="m-label">${esc(m.label)}</span>
+          <li><span class="m-label">${esc(m.label)}</span>
             <span class="m-value${m.met ? " hit" : ""}">${esc(fmt(m.value, m.unit))}</span>
-            <span class="m-trigger">${m.trigger ? `Fires when ${esc(m.trigger)}` : "Context only"}${m.as_of ? `<span class="m-date"> · official ${esc(dayLabel(m.as_of))}</span>` : ""}</span>
+            <span class="m-trigger">${m.trigger ? `Fires when ${esc(m.trigger)}` : "Context only"}${m.as_of ? ` · official ${esc(dayLabel(m.as_of))}` : ""}</span>
             ${m.preliminary ? `<span class="m-prelim">Preliminary ${esc(dayLabel(m.preliminary.date))}: ${esc(fmt(m.preliminary.value, m.unit === "chg" ? "" : m.unit))} from ${esc(m.preliminary.source)}, not used until official</span>` : ""}
           </li>`).join("")}
         </ul>
       </article>`).join("");
   }
 
-  function renderRules(status) {
-    $("rules").innerHTML = status.rules.map((r) => {
-      const fired = r.fired === true;
-      const winner = r.phase_id === status.phase_id;
-      const verdict = r.fired === true ? (winner ? "Passes, sets phase" : "Passes") : r.fired === false ? "Fails" : "Can't tell";
-      const conds = r.conditions.map((c) => {
-        const mark = c.unsourced ? ["unk", "–"] : c.met === true ? ["yes", "✓"] : c.met === false ? ["no", "✕"] : ["unk", "?"];
-        return `<li>
-          <span class="mark ${mark[0]}" aria-label="${mark[0]}">${mark[1]}</span>
-          <span><span class="c-name">${esc(c.name)}</span><span class="c-threshold">needs ${esc(c.threshold)}</span>
-            ${c.unsourced ? `<span class="c-note">No data feed exists; skipped</span>` : ""}</span>
-          <span class="c-value">${esc(fmtCondition(c.value, c.name))}</span>
-        </li>`;
-      }).join("");
-      const title = r.phase.replace(/^Phase \d: /, "");
-      return `<details class="rule${fired && winner ? " fired" : ""}"${winner ? " open" : ""}>
-        <summary>
-          <span class="rule-num">${r.phase_id}</span>
-          <span><span class="rule-title">${esc(title)}</span><br><span class="rule-logic">${r.logic === "ANY" ? "Any one condition" : "All conditions"}</span></span>
-          <span class="verdict">${verdict}</span>
-        </summary>
-        <ul class="conds">${conds}</ul>
-      </details>`;
-    }).join("");
+  function renderTally(tally) {
+    if (!tally) return;
+    const total = tally.days.length;
+    const keys = Object.keys(tally.counts || {});
+    $("tally-bar").innerHTML = total ? keys.map((k) => `<span class="${TALLY[k][0]}" style="width:${(100 * tally.counts[k] / total).toFixed(2)}%"></span>`).join("") : "";
+    $("tally-legend").innerHTML = keys.map((k) => `<div><i class="${TALLY[k][0]}"></i><span>${esc(TALLY[k][1])}</span><b>${tally.counts[k]}</b></div>`).join("");
+    $("tally-summary").textContent = tally.summary;
+    if (!total) { $("tally-more").hidden = true; return; }
+    $("tally-days").innerHTML = tally.days.map((d) => `<div class="tday">
+      <span>${esc(dayLabel(d.date))}<span class="tag ${TALLY[d.driver][0]}">${esc(d.driver === "chips" ? "chip-specific" : d.driver === "fear" ? "volatility" : d.driver === "rates" ? "yields" : "unknown")}</span></span>
+      <span class="tday-move">${signed(d.soxx_pct, 1)}%</span>
+      <span class="tday-detail">${esc(d.detail)}</span></div>`).join("");
   }
 
+  // --- Everything else -------------------------------------------------------------------------
   function renderSignals(telemetry) {
-    $("signals").innerHTML = telemetry.map((s) => {
+    $("signals").innerHTML = (telemetry || []).map((s) => {
       const cls = s.triggered === true ? `on ${s.tone === "constructive" ? "good" : ""}` : s.triggered === null ? "unk" : "";
       const value = s.value === null ? "n/a" : s.indicator.startsWith("10Y") ? `${s.value.toFixed(2)}%` : s.value >= 1000 ? Math.round(s.value).toLocaleString("en-US") : s.value.toFixed(s.value < 10 ? 3 : 1);
-      return `<div class="signal ${cls}">
-        <span class="dot" aria-hidden="true"></span>
+      return `<div class="signal ${cls}"><span class="dot" aria-hidden="true"></span>
         <span><span class="s-name">${esc(s.indicator)}</span>
           <span class="s-sub">${s.triggered === true ? `<b>${esc(s.signal.toLowerCase())}</b>, ` : ""}fires when ${esc(s.trigger)}</span></span>
-        <span class="s-value">${esc(value)}</span>
-      </div>`;
+        <span class="s-value">${esc(value)}</span></div>`;
     }).join("");
   }
 
@@ -487,60 +648,38 @@
     const q = status.data_quality;
     if (!q) return;
     const warns = (q.issues || []).filter((i) => i.severity === "warn");
-    if (q.status === "OK" && !warns.length) {
-      $("quality-ok").hidden = false;
-      $("quality-ok").textContent = q.summary;
-      return;
-    }
-    if (q.status === "STALE") return;  // the stale banner already explains it
+    if (q.status === "OK" && !warns.length) { $("quality-ok").hidden = false; $("quality-ok").textContent = q.summary; return; }
+    if (q.status === "STALE") return;
     $("quality").hidden = false;
     $("quality").innerHTML = `<strong>${q.status === "OK" ? "Call inputs verified, with gaps elsewhere." : "Some inputs couldn't be verified."}</strong> ${esc(q.summary)}
       <ul>${warns.map((i) => `<li>${esc(i.message)}</li>`).join("")}</ul>`;
   }
 
-  function renderHistory(status, history) {
+  function renderHistory(history) {
     if (!history.length) return;
     $("history-section").hidden = false;
     const recent = history.slice(-30);
     const pad = 30 - recent.length;
-    $("strip").innerHTML = "<span></span>".repeat(pad) + recent.map((h) => `<span class="p${h.phase_id}" title="${esc(h.phase)}"></span>`).join("");
+    const cls = (h) => (STRESS[h.risk] && h.risk !== "UNKNOWN" ? h.risk : "old");
+    $("strip").innerHTML = "<span></span>".repeat(pad) + recent.map((h) => `<span class="${cls(h)}" title="${esc(nyTime(h.as_of, { month: "short", day: "numeric", hour: "numeric" }))}: ${esc(h.risk)}"></span>`).join("");
     $("strip-start").textContent = nyTime(recent[0].as_of, { month: "short", day: "numeric" });
-    const changes = [];
-    for (let i = history.length - 1; i > 0 && changes.length < 5; i--) {
-      if (history[i].phase_id !== history[i - 1].phase_id) changes.push(history[i]);
-    }
-    $("changes").innerHTML = changes.length
-      ? changes.map((h) => `<li><span>${esc(h.phase)}</span><span class="when">${nyTime(h.as_of, { month: "short", day: "numeric" })}</span></li>`).join("")
-      : `<li><span>No phase change in the stored history yet.</span></li>`;
   }
 
   function render(status, history) {
-    const [accent, soft] = RISK[status.risk_level] || RISK.UNDETERMINED;
-    document.documentElement.style.setProperty("--accent", accent);
-    document.documentElement.style.setProperty("--accent-soft", soft);
-
     const when = nyTime(status.as_of, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
     $("updated").textContent = `${when} ET`;
-    if (status.stale) {
-      $("stale").hidden = false;
-      $("stale").textContent = status.stale_reason || "Live data was unavailable; showing the last good read.";
-    }
-
-    drawDial(status);
-    $("phase-name").textContent = status.phase.replace(/^Phase \d: /, "");
-    const riskLabel = status.risk_level === "UNDETERMINED" ? "Risk undetermined" : `${status.risk_level[0]}${status.risk_level.slice(1).toLowerCase()} risk`;
-    $("phase-meta").innerHTML = `<span class="pill risk"><span class="dot"></span>${esc(riskLabel)}</span><span class="pill">${esc(CONFIDENCE[status.confidence] || status.confidence)}</span>`;
-    $("summary").textContent = status.actionable_summary;
-    $("since").textContent = phaseSince(status, history);
-
+    const session = status.today && status.today.us_session;
+    const next = nextRun(new Date());
+    $("dataline").innerHTML = `${session ? `US data: <b>${esc(dayLabel(session))} close</b>` : "US data unavailable"}${next ? ` · next update ${esc(next)}` : ""}`;
+    if (status.stale) { $("stale").hidden = false; $("stale").textContent = status.stale_reason || "Live data was unavailable; showing the last good read."; }
     renderQuality(status);
-    $("diagnosis").textContent = status.diagnosis || "No diagnosis in this snapshot.";
-    if (status.backdrop) { $("backdrop").hidden = false; $("backdrop").innerHTML = `<b>Backdrop:</b> ${esc(status.backdrop)}`; }
-    renderDrivers(status.drivers || []);
-    renderRules(status);
+    if (status.cycle) renderCycle(status.cycle);
+    else renderCycle({ known: false, phase: "Unknown", phase_id: 0, summary: "This snapshot predates the filings-based cycle.", checks: [], catalysts: [], metrics: [], filings: [], history: [] });
+    renderToday(status);
+    renderTally(status.tally);
     renderSignals(status.telemetry);
     renderInputs(status.data_quality);
-    renderHistory(status, history);
+    renderHistory(history);
     $("notes").innerHTML = (status.notes || []).map((n) => `<li>${esc(n)}</li>`).join("");
     $("content").hidden = false;
   }

@@ -105,7 +105,9 @@ def write_outputs(status: RegimeStatus, state: Path, site: Path) -> list[dict[st
     for folder in (site, state):
         (folder / "regime.json").write_text(payload, encoding="utf-8")
         (folder / "history.json").write_text(history_json, encoding="utf-8")
-    shutil.copyfile(PAGE_SOURCE, site / "index.html")
+    for asset in PAGE_SOURCE.parent.iterdir():  # the page plus its icons
+        if asset.is_file():
+            shutil.copyfile(asset, site / asset.name)
     return history
 
 

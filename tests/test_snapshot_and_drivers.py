@@ -135,6 +135,7 @@ def test_history_appends_live_skips_stale_and_caps(tmp_path: Path, calm_market: 
     stale = resolve_status(None, "down", state)
     assert write_outputs(stale, state, site)[-1]["as_of"] == live.as_of
     assert (site / "index.html").exists() and json.loads((site / "regime.json").read_text())["stale"]
+    assert (site / "apple-touch-icon.png").exists() and (site / "favicon-32.png").exists()
 
 
 def test_krx_cache_roundtrip(tmp_path: Path) -> None:

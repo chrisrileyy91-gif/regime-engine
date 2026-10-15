@@ -9,12 +9,13 @@ import pandas as pd
 
 from app.cache import SnapshotStore
 from app.claude_fill import FillReport, apply_fills
-from app.config import CYCLE_PRICE_TICKERS, MARKET_TICKER
+from app.config import CYCLE_PRICE_TICKERS, TALLY_TICKERS
 from app.data import FetchResult, fetch_all
 from app.drivers import backdrop, build_drivers, diagnose
 from app.features import build_features
 from app.fundamentals import SecCache, build_cycle
 from app.models import Condition, QualityIssue, RegimeStatus, SourceStatus
+from app.news import NewsCache
 from app.regime import _any, telemetry
 from app.today import build_today, tally
 from app.verify import assess, verify_all
@@ -37,12 +38,8 @@ def chip_prices(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
 
 def tally_extras(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
     """Tally-only series: the equal-weight S&P 500 and Cboe's intraday highs and 30Y."""
-    keys = {
-        "market": f"{MARKET_TICKER.lower()}@alpaca",
-        "y10_high": "y10_high@cboe",
-        "y30": "y30@cboe",
-        "y30_high": "y30_high@cboe",
-    }
+    keys = {name: f"{ticker.lower()}@alpaca" for name, ticker in TALLY_TICKERS.items()}
+    keys.update({"y10_high": "y10_high@cboe", "y30": "y30@cboe", "y30_high": "y30_high@cboe"})
     out = {}
     for name, key in keys.items():
         r = results.get(key)
@@ -56,6 +53,7 @@ def build_status(
     today: date | None = None,
     fills: FillReport | None = None,
     sec_cache: SecCache | None = None,
+    news: NewsCache | None = None,
 ) -> RegimeStatus:
     today = today or datetime.now(timezone.utc).date()
     verified = verify_all(results, today)
@@ -93,7 +91,7 @@ def build_status(
         as_of=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         cycle=cycle,
         today=day,
-        tally=tally(verified, tally_extras(results)),
+        tally=tally(verified, tally_extras(results), news),
         diagnosis=diagnose(features, drivers),
         backdrop=backdrop(features),
         drivers=drivers,

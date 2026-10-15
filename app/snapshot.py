@@ -23,6 +23,7 @@ from app.claude_fill import FillCache, FillReport, UsageState, fill_gaps
 from app.data import FetchResult, KrxCache, fetch_all, redact
 from app.fundamentals import SecCache, fetch_filings
 from app.models import DataQuality, QualityIssue, RegimeStatus
+from app.news import NewsCache, update_news
 from app.service import build_status
 from app.verify import verify_all
 
@@ -31,6 +32,7 @@ CRITICAL_INPUTS = ("tnx_pct", "vix", "soxx_rsi")
 KRX_CACHE_FILE = "krx_cache.json"
 SEC_CACHE_FILE = "sec_cache.json"
 FILL_CACHE_FILE = "claude_fills.json"
+NEWS_CACHE_FILE = "news_cache.json"
 CLAUDE_USAGE_FILE = "claude_usage.json"
 PAGE_SOURCE = Path(__file__).resolve().parent.parent / "web" / "index.html"
 
@@ -65,10 +67,11 @@ def resolve_status(
     state: Path,
     fills: FillReport | None = None,
     sec_cache: SecCache | None = None,
+    news: NewsCache | None = None,
 ) -> RegimeStatus:
     """Live status if any critical input exists, else the previous snapshot marked stale."""
     if results is not None:
-        status = build_status(results, fills=fills, sec_cache=sec_cache)
+        status = build_status(results, fills=fills, sec_cache=sec_cache, news=news)
         if any(status.inputs.get(k) is not None for k in CRITICAL_INPUTS):
             return status
         error = "all critical feeds (10Y, VIX, SOXX) unavailable"
@@ -123,6 +126,27 @@ async def _fill(
         return None
     verified = verify_all(results, datetime.now(timezone.utc).date())
     return await fill_gaps(verified, results, usage, cache=cache)
+
+
+def load_news_cache(state: Path) -> NewsCache:
+    data = _read_json(state / NEWS_CACHE_FILE)
+    return data if isinstance(data, dict) else {}
+
+
+def save_news_cache(state: Path, cache: NewsCache) -> None:
+    state.mkdir(parents=True, exist_ok=True)
+    (state / NEWS_CACHE_FILE).write_text(json.dumps(cache, indent=1, sort_keys=True), encoding="utf-8")
+
+
+async def _headlines(status: RegimeStatus, cache: NewsCache, usage: UsageState) -> list[str]:
+    """Label the tally's days from their headlines (cached; finished days are read once)."""
+    if status.tally is None or not status.tally.days:
+        return []
+    days = [(d.date, d.soxx_pct, d.detail) for d in status.tally.days]
+    try:
+        return await update_news(cache, days, usage)
+    except Exception as exc:  # headlines are an annotation; never fail the read over them
+        return [f"Headlines step failed: {redact(f'{type(exc).__name__}: {exc}')}"]
 
 
 def load_fill_cache(state: Path) -> FillCache:
@@ -186,7 +210,16 @@ def main(argv: list[str] | None = None) -> int:
     fills = asyncio.run(_fill(results, usage, fill_cache))
     save_usage(args.state, usage)
     save_fill_cache(args.state, fill_cache)
-    status = resolve_status(results, error, args.state, fills, sec_cache)
+    news_cache = load_news_cache(args.state)
+    status = resolve_status(results, error, args.state, fills, sec_cache, news_cache)
+    news_notes: list[str] = []
+    if not status.stale:
+        news_notes = asyncio.run(_headlines(status, news_cache, usage))
+        save_news_cache(args.state, news_cache)
+        save_usage(args.state, usage)
+        status = resolve_status(results, error, args.state, fills, sec_cache, news_cache)
+        if status.data_quality is not None:
+            status.data_quality.issues += [QualityIssue(severity="info", message=n) for n in news_notes]
     history = write_outputs(status, args.state, args.site)
 
     quality = status.data_quality

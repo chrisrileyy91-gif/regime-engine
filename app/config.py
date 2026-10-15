@@ -21,6 +21,9 @@ class Thresholds:
     semi_rsi_digestion: float = 40.0  # SOXX RSI(14) below this = chip momentum broken
     vix_jump_pct: float = 10.0  # tally: VIX up this much on a semis down day = market-wide fear
     market_drop_pct: float = -1.0  # tally: equal-weight S&P 500 down this much the same day = broad selling
+    oil_z: float = 2.0  # tally: USO move this unusual (either way) vs its prior 60 sessions = oil shock
+    dollar_z: float = 2.0  # tally: UUP up this unusually = dollar squeeze
+    tally_z_window: int = 60
 
     # --- Backdrop and telemetry (shown, never counted as stress) -----------------------------
     tnx_pctile_high: float = 80.0  # 10Y higher than this % of the trailing window
@@ -188,6 +191,27 @@ CLAUDE_TIMEOUT_SECONDS = 120.0
 CLAUDE_PRICES = {"claude-haiku-5-5": (0.10, 0.50), "claude-sonnet-5-5": (2.00, 10.00)}
 CLAUDE_SEARCH_PRICE = 0.01
 
+# --- Headlines (the part gauges can't see) -------------------------------------------------
+# Benzinga via Alpaca's news API (same keys as the bars): timestamped, ticker-tagged, back to 2015.
+# Claude only CLASSIFIES the headlines it is given (no web search) and must cite their ids; the
+# page links the actual headlines so every label can be checked. Gauges stay the measurement:
+# headlines annotate a day and flag disagreement, they never overwrite a gauge.
+ALPACA_NEWS_URL = "https://data.alpaca.markets/v1beta1/news"
+NEWS_SYMBOLS = ("NVDA", "AVGO", "AMD", "MU", "TSM", "ASML", "INTC", "SOXX", "SMH", "SPY", "QQQ")
+NEWS_MAX_PAGES = 4  # x50 headlines per day
+NEWS_MAX_DAYS_PER_RUN = 25  # first run backfills the tally; later runs add one day at a time
+NEWS_CATEGORIES = {
+    "company": "company news (earnings, guidance, deals, a single chipmaker)",
+    "ai_demand": "AI spending or demand worries (capex, financing, competition, model efficiency)",
+    "policy": "government policy (export controls, tariffs, regulation, subsidies)",
+    "analyst": "analyst calls (downgrades, price targets)",
+    "macro_data": "economic data (CPI, jobs, PMI, GDP)",
+    "fed": "the Federal Reserve (decisions, speeches, rate expectations)",
+    "geopolitics": "geopolitics or oil (war, sanctions, supply shocks)",
+    "none_clear": "no clear driver in the headlines",
+}
+NEWS_MACRO = ("macro_data", "fed", "geopolitics")  # headline says macro; compare with the gauges
+
 # What to ask for, per input: description, units, and the market whose session must be over.
 GAP_QUESTIONS: dict[str, tuple[str, str]] = {
     "y10": ("U.S. 10-year Treasury note yield at the close", "us"),
@@ -257,6 +281,10 @@ CYCLE_PRICE_TICKERS = tuple(t for t, _, _ in CYCLE_COMPANIES["chips"])
 # cap-weighted index, so a semis rout drags SPY by itself (Oct 14: SOXX -4.5%, SPY -1.1%; Sep 14:
 # SPY -0.5% while RSP +0.1%). Alpaca SIP, fetched with SOXX, not cross-checked (classification only).
 MARKET_TICKER = "RSP"
+# Oil and the dollar, same-day, from the same consolidated tape (the choice Crude Logic already
+# made after Yahoo's CL=F broke): USO tracks front-month WTI futures, UUP the dollar index.
+# EIA's official WTI spot posts in weekly batches, too late for a same-day read.
+TALLY_TICKERS = {"market": MARKET_TICKER, "oil": "USO", "dollar": "UUP"}
 # Tally-only Cboe series (official, not cross-checked; classification only). Close-to-close data
 # misses a yield spike that reverses: on CPI day Oct 14 the 10Y rose 11 bps intraday and closed -3.
 # The 30Y catches long-end shocks the 10Y misses (Aug 18: 30Y at its highest since 2007).

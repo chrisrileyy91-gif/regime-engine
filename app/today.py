@@ -16,7 +16,7 @@ from typing import Any
 
 import pandas as pd
 
-from app.config import STRESSED_VIX, TALLY_DAYS, TALLY_DROP_PCT, THRESHOLDS, Thresholds
+from app.config import NEWS_MACRO, STRESSED_VIX, TALLY_DAYS, TALLY_DROP_PCT, THRESHOLDS, Thresholds
 from app.drivers import day_label
 from app.features import MarketFeatures
 from app.models import Driver, OvernightItem, Stress, Tally, TallyDay, Today
@@ -25,20 +25,36 @@ from app.verify import Verified
 STRESS_LABELS = {"CALM": "Calm", "ELEVATED": "Elevated", "STRESSED": "Stressed", "UNKNOWN": "Unknown"}
 TALLY_LABELS = {
     "rates": "yields jumped (10Y or 30Y, at the close or intraday)",
+    "oil": "oil moved sharply (USO, 2 sigma either way)",
+    "dollar": "the dollar jumped (UUP, 2 sigma)",
     "fear": "VIX spiked",
     "market": "the broad market fell (equal-weight S&P 500 down 1%+)",
     "rotation": "no macro gauge moved, and software rose: money moved from chips to software",
     "chips": "no macro gauge moved, and software fell too",
     "unknown": "couldn't tell (a gauge was missing)",
 }
-TALLY_ORDER = ("rates", "fear", "market", "rotation", "chips", "unknown")
+TALLY_ORDER = ("rates", "oil", "dollar", "fear", "market", "rotation", "chips", "unknown")
+MACRO_DRIVERS = ("rates", "oil", "dollar", "fear", "market")
+RESIDUAL = ("rotation", "chips")
 TALLY_SHORT = {
     "rates": "yields jumped",
+    "oil": "oil shock",
+    "dollar": "dollar jump",
     "fear": "VIX spiked",
     "market": "broad market fell",
     "rotation": "rotation into software",
     "chips": "chips alone",
     "unknown": "couldn't tell",
+}
+NEWS_SHORT = {
+    "company": "company news",
+    "ai_demand": "AI-demand worries",
+    "policy": "policy",
+    "analyst": "analyst calls",
+    "macro_data": "economic data",
+    "fed": "the Fed",
+    "geopolitics": "geopolitics/oil",
+    "none_clear": "nothing clear",
 }
 
 
@@ -88,74 +104,79 @@ def _at(d: dict[Any, Any], ts: Any) -> float | None:
 def tally(
     verified: dict[str, Verified],
     extras: dict[str, pd.Series] | None = None,
+    news: dict[str, dict[str, Any]] | None = None,
     t: Thresholds = THRESHOLDS,
 ) -> Tally:
     """Tag each recent semis drop by what else moved that day, checked in order:
 
-    1. rates   10Y or 30Y up >= 10 bps at the close, or at its intraday high vs the prior close,
-               or an unusual 10Y close move (z >= 1.5). Intraday matters: on CPI day (Oct 14) the
-               10Y rose 11 bps by mid-session and closed down 3.
-    2. fear    VIX up >= 10% at the close.
-    3. market  equal-weight S&P 500 (RSP) down >= 1%.
-    4. rotation / chips   none of the above. Software up = rotation; software down = chips.
+    1. rates   10Y or 30Y up >= 10 bps at the close or at its intraday high vs the prior close, or an
+               unusual 10Y close move (z >= 1.5). Intraday matters: on CPI day (Oct 14) the 10Y rose
+               11 bps by mid-session and closed down 3.
+    2. oil     USO move >= 2 sigma either way vs its prior 60 sessions.
+    3. dollar  UUP up >= 2 sigma.
+    4. fear    VIX up >= 10% at the close.
+    5. market  equal-weight S&P 500 (RSP) down >= 1%.
+    6. rotation / chips   none of the above (software up = rotation, down = chips alone).
 
-    The last two are what is LEFT when no gauge moved. They do not prove there was no macro news:
-    oil, the dollar, policy headlines and company news are not measured. A day is "unknown" unless
-    every gauge that could have claimed it was available, and the newest day stays provisional
-    until all of its official closes have posted.
+    A gauge can only claim a day if every gauge above it is known; the residual needs all of them.
+    Every gauge that moved is listed in `moved`. Headlines (news.py) annotate each day and flag
+    disagreement with the gauges; they never change the gauge label. The newest day stays
+    provisional (not counted) until all of its official closes have posted.
     """
     extras = extras or {}
+    news = news or {}
     soxx = _pct_changes(verified["soxx"].series if "soxx" in verified else None)
     if soxx.empty:
         return Tally(summary="Semis prices unavailable, so the tally can't be built.")
     y10_close = verified["y10"].series if "y10" in verified else None
     y10 = _bps_changes(y10_close)
-    y10_z = _zscores(y10, t.tnx_delta_z_window) if not y10.empty else pd.Series(dtype=float)
-    y10_spike = _spike_bps(y10_close, extras.get("y10_high"))
-    y30 = _bps_changes(extras.get("y30"))
-    y30_spike = _spike_bps(extras.get("y30"), extras.get("y30_high"))
-    vix = _pct_changes(verified["vix"].series if "vix" in verified else None)
-    igv = _pct_changes(verified["igv"].series if "igv" in verified else None)
-    mkt = _pct_changes(extras.get("market"))
-    maps = {
-        k: dict(v.items())
-        for k, v in (
-            ("y10", y10),
-            ("z", y10_z),
-            ("y10_spike", y10_spike),
-            ("y30", y30),
-            ("y30_spike", y30_spike),
-            ("vix", vix),
-            ("igv", igv),
-            ("mkt", mkt),
-        )
+    oil = _pct_changes(extras.get("oil"))
+    usd = _pct_changes(extras.get("dollar"))
+    series = {
+        "y10": y10,
+        "z": _zscores(y10, t.tnx_delta_z_window) if not y10.empty else pd.Series(dtype=float),
+        "y10_spike": _spike_bps(y10_close, extras.get("y10_high")),
+        "y30": _bps_changes(extras.get("y30")),
+        "y30_spike": _spike_bps(extras.get("y30"), extras.get("y30_high")),
+        "vix": _pct_changes(verified["vix"].series if "vix" in verified else None),
+        "igv": _pct_changes(verified["igv"].series if "igv" in verified else None),
+        "mkt": _pct_changes(extras.get("market")),
+        "oil": oil,
+        "oil_z": _zscores(oil, t.tally_z_window) if not oil.empty else pd.Series(dtype=float),
+        "usd": usd,
+        "usd_z": _zscores(usd, t.tally_z_window) if not usd.empty else pd.Series(dtype=float),
     }
+    maps = {k: dict(v.items()) for k, v in series.items()}
 
     drops = soxx[soxx <= TALLY_DROP_PCT].iloc[-TALLY_DAYS:]
     newest = soxx.index[-1]
     days = []
     for ts, move in drops.items():
         v = {k: _at(m, ts) for k, m in maps.items()}
-        rate_tests = [
+        rates = _any_true(
             None if v["y10"] is None else v["y10"] >= t.tnx_1d_spike_bps,
             None if v["z"] is None else v["z"] >= t.tnx_delta_z,
             None if v["y10_spike"] is None else v["y10_spike"] >= t.tnx_1d_spike_bps,
             None if v["y30"] is None else v["y30"] >= t.tnx_1d_spike_bps,
             None if v["y30_spike"] is None else v["y30_spike"] >= t.tnx_1d_spike_bps,
-        ]
-        rates = True if any(x is True for x in rate_tests) else (False if all(x is False for x in rate_tests) else None)
-        fear = None if v["vix"] is None else v["vix"] >= t.vix_jump_pct
-        broad = None if v["mkt"] is None else v["mkt"] <= t.market_drop_pct
-        if rates:
-            driver = "rates"
-        elif rates is False and fear:
-            driver = "fear"
-        elif rates is False and fear is False and broad:
-            driver = "market"
-        elif rates is False and fear is False and broad is False and v["igv"] is not None:
-            driver = "rotation" if v["igv"] > 0 else "chips"
+        )
+        gauges = {
+            "rates": rates,
+            "oil": None if v["oil_z"] is None else abs(v["oil_z"]) >= t.oil_z,
+            "dollar": None if v["usd_z"] is None else v["usd_z"] >= t.dollar_z,
+            "fear": None if v["vix"] is None else v["vix"] >= t.vix_jump_pct,
+            "market": None if v["mkt"] is None else v["mkt"] <= t.market_drop_pct,
+        }
+        driver = "unknown"
+        for key in MACRO_DRIVERS:
+            if gauges[key] is True:
+                driver = key
+                break
+            if gauges[key] is None:
+                break
         else:
-            driver = "unknown"
+            if v["igv"] is not None:
+                driver = "rotation" if v["igv"] > 0 else "chips"
         missing = [
             name
             for name, key in (
@@ -163,48 +184,85 @@ def tally(
                 ("10Y intraday high", "y10_spike"),
                 ("30Y", "y30"),
                 ("30Y intraday high", "y30_spike"),
+                ("oil", "oil_z"),
+                ("dollar", "usd_z"),
                 ("VIX close", "vix"),
                 ("equal-weight S&P", "mkt"),
                 ("software", "igv"),
             )
             if v[key] is None
         ]
-        # A row is final once every gauge for its date is in; the newest row may still be waiting.
-        provisional = bool(missing) and ts == newest
         parts = [
             _fmt_bps("10Y", v["y10"], v["y10_spike"]),
             _fmt_bps("30Y", v["y30"], v["y30_spike"]),
+            f"oil {v['oil']:+.1f}%" if v["oil"] is not None else "oil n/a",
+            f"dollar {v['usd']:+.2f}%" if v["usd"] is not None else "dollar n/a",
             f"VIX {v['vix']:+.0f}%" if v["vix"] is not None else "VIX n/a",
             f"equal-weight S&P {v['mkt']:+.1f}%" if v["mkt"] is not None else "equal-weight S&P n/a",
             f"software {v['igv']:+.1f}%" if v["igv"] is not None else "software n/a",
         ]
         if missing:
             parts.append(f"missing: {', '.join(missing)}")
+        date = str(pd.Timestamp(str(ts)).date())
+        label = news.get(date)
         days.append(
             TallyDay(
-                date=str(pd.Timestamp(str(ts)).date()),
+                date=date,
                 soxx_pct=round(float(move), 2),
                 driver=driver,
-                provisional=provisional,
-                tnx_bps=None if v["y10"] is None else round(v["y10"], 1),
-                tnx_spike_bps=None if v["y10_spike"] is None else round(v["y10_spike"], 1),
-                y30_bps=None if v["y30"] is None else round(v["y30"], 1),
-                vix_pct=None if v["vix"] is None else round(v["vix"], 1),
-                market_pct=None if v["mkt"] is None else round(v["mkt"], 2),
-                igv_pct=None if v["igv"] is None else round(v["igv"], 2),
+                moved=[k for k in MACRO_DRIVERS if gauges[k] is True],
+                provisional=bool(missing) and ts == newest,
+                tnx_bps=_r(v["y10"], 1),
+                tnx_spike_bps=_r(v["y10_spike"], 1),
+                y30_bps=_r(v["y30"], 1),
+                oil_pct=_r(v["oil"], 2),
+                dollar_pct=_r(v["usd"], 2),
+                vix_pct=_r(v["vix"], 1),
+                market_pct=_r(v["mkt"], 2),
+                igv_pct=_r(v["igv"], 2),
                 detail="; ".join(parts),
+                news=label,
+                news_flag=_news_flag(driver, label),
             )
         )
     days.reverse()  # newest first
     final = [d for d in days if not d.provisional]
     counts = Counter(d.driver for d in final)
-    ordered = {k: counts[k] for k in TALLY_ORDER if counts.get(k)}
     return Tally(
         days=days,
-        counts=ordered,
+        counts={k: counts[k] for k in TALLY_ORDER if counts.get(k)},
+        news_counts=_news_counts([d for d in final if d.driver in RESIDUAL]),
         window_sessions=int((soxx.index >= drops.index[0]).sum()) if len(drops) else 0,
         summary=_tally_summary(days, final, counts),
     )
+
+
+def _any_true(*xs: bool | None) -> bool | None:
+    if any(x is True for x in xs):
+        return True
+    return False if all(x is False for x in xs) else None
+
+
+def _r(x: float | None, digits: int) -> float | None:
+    return None if x is None else round(x, digits)
+
+
+def _news_flag(driver: str, label: dict[str, Any] | None) -> str | None:
+    """Say so when the headlines and the gauges disagree. Never pick a side silently."""
+    if not label:
+        return None
+    category = str(label.get("category", ""))
+    if driver in RESIDUAL and category in NEWS_MACRO:
+        return f"Headlines point to {NEWS_SHORT[category]}, but no macro gauge moved"
+    if driver in MACRO_DRIVERS and category in ("company", "ai_demand", "analyst"):
+        return f"A macro gauge moved, but the headlines point to {NEWS_SHORT[category]}"
+    return None
+
+
+def _news_counts(days: list[TallyDay]) -> dict[str, int]:
+    counts = Counter(str(d.news.get("category")) for d in days if d.news)
+    counts["unlabelled"] = len([d for d in days if not d.news])
+    return {k: counts[k] for k in (*NEWS_SHORT, "unlabelled") if counts.get(k)}
 
 
 def _spike_bps(close: pd.Series | None, high: pd.Series | None) -> pd.Series:
@@ -233,15 +291,20 @@ def _tally_summary(days: list[TallyDay], final: list[TallyDay], counts: Counter[
     pending = [d for d in days if d.provisional]
     if pending:
         text += f" {day_label(pending[0].date)} is provisional until its official closes post, and isn't counted."
-    residual = counts.get("rotation", 0) + counts.get("chips", 0)
-    if n and residual * 2 > n:
-        text += (
-            f" On {residual} of {n}, none of the macro gauges moved and the drop was concentrated in chips. "
-            "That is all the gauges can say: they measure moves, not news, oil or policy headlines, so check "
-            "the day list before calling any single day a pure chip story."
-        )
-    elif n and counts.get("rates", 0) * 2 > n:
-        text += " Most came with a yield jump: here, 'valuation' mostly means the discount rate."
+    residual = [d for d in final if d.driver in RESIDUAL]
+    if residual:
+        labelled = [d for d in residual if d.news]
+        news = Counter(str(d.news.get("category")) for d in labelled if d.news)
+        text += f" On {len(residual)} of {n}, no macro gauge moved"
+        if labelled:
+            parts = [f"{NEWS_SHORT[k]} {news[k]}" for k in NEWS_SHORT if news.get(k)]
+            text += f"; the headlines on those days: {', '.join(parts)}"
+            if len(labelled) < len(residual):
+                text += f" ({len(residual) - len(labelled)} not yet read)"
+        text += "."
+        flagged = [d for d in final if d.news_flag]
+        if flagged:
+            text += f" {len(flagged)} day(s) where headlines and gauges disagree are flagged in the day list."
     return text
 
 

@@ -196,7 +196,7 @@
   /* tally */
   .tally-bar { margin-top: 12px; display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--track); }
   .tally-bar span { display: block; height: 100%; }
-  .t-rates { background: var(--rates); } .t-fear { background: var(--high); } .t-chips { background: var(--moderate); } .t-market { background: var(--p1); } .t-rotation { background: var(--p3); } .tag.pending { background: transparent; color: var(--ink-3); border: 1px dashed var(--ink-3); } .t-unknown { background: var(--unknown); }
+  .t-rates { background: var(--rates); } .t-fear { background: var(--high); } .t-chips { background: var(--moderate); } .t-market { background: var(--p1); } .t-rotation { background: var(--p3); } .t-oil { background: #8a5a2b; } .t-dollar { background: #4f7f8f; } .tag.pending { background: transparent; color: var(--ink-3); border: 1px dashed var(--ink-3); } .t-unknown { background: var(--unknown); }
   .tally-legend { margin-top: 8px; display: grid; gap: 4px; font-size: 13.5px; }
   .tally-legend div { display: grid; grid-template-columns: 12px 1fr auto; gap: 8px; align-items: center; }
   .tally-legend i { width: 10px; height: 10px; border-radius: 2px; }
@@ -207,6 +207,12 @@
   .tday:first-child { border-top: 0; }
   .tday-move { font-weight: 700; color: var(--high); text-align: right; }
   .tday-detail { grid-column: 1 / -1; font-size: 12.5px; color: var(--ink-3); }
+  .tday-news { grid-column: 1 / -1; font-size: 13px; color: var(--ink-2); margin-top: 3px; }
+  .tday-news b { font-weight: 600; color: var(--ink); }
+  .tday-news a { color: var(--p1); text-decoration: none; display: block; font-size: 12.5px; margin-top: 2px; }
+  .tday-flag { grid-column: 1 / -1; font-size: 12.5px; font-weight: 600; color: var(--moderate); margin-top: 3px; }
+  .news-mix { margin-top: 8px; font-size: 13.5px; color: var(--ink-2); }
+  .news-mix b { color: var(--ink); }
   .tag { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; margin-left: 6px; color: var(--surface); }
   details.more > summary { cursor: pointer; font-size: 13.5px; color: var(--ink-2); font-weight: 600; margin-top: 10px; }
 
@@ -315,7 +321,7 @@
 
     <section>
       <h2>Is it a scapegoat?</h2>
-      <p class="lede">What else moved on each recent semis sell-off, checked in order: yields (10Y and 30Y, at the close or intraday), VIX, the equal-weight S&amp;P 500. The last two buckets are what's left when none of those moved. The gauges can't see news, oil or policy headlines.</p>
+      <p class="lede">What moved on each recent semis sell-off. Gauges first, in order: yields (10Y and 30Y, close or intraday), oil, the dollar, VIX, the equal-weight S&amp;P 500. Then the day's headlines (Benzinga, read by Claude, each label linked to its articles). When the two disagree, the day is flagged.</p>
       <div class="tally-bar" id="tally-bar"></div>
       <div class="tally-legend" id="tally-legend"></div>
       <p class="tally-summary" id="tally-summary"></p>
@@ -374,13 +380,16 @@
   };
   const TALLY = {
     rates: ["t-rates", "Yields jumped (close or intraday)"],
+    oil: ["t-oil", "Oil shock (USO, 2σ)"],
+    dollar: ["t-dollar", "Dollar jumped (UUP, 2σ)"],
     fear: ["t-fear", "VIX spiked"],
     market: ["t-market", "Broad market fell (equal-weight S&P −1%+)"],
     rotation: ["t-rotation", "No gauge moved; money rotated into software"],
     chips: ["t-chips", "No gauge moved; software fell too"],
     unknown: ["t-unknown", "Couldn't tell (a gauge was missing)"],
   };
-  const TAG = { rates: "yields", fear: "VIX", market: "broad market", rotation: "rotation", chips: "chips alone", unknown: "unknown" };
+  const NEWS = { company: "Company news", ai_demand: "AI-demand worries", policy: "Policy", analyst: "Analyst calls", macro_data: "Economic data", fed: "The Fed", geopolitics: "Geopolitics/oil", none_clear: "Nothing clear", unlabelled: "Not read yet" };
+  const TAG = { rates: "yields", oil: "oil", dollar: "dollar", fear: "VIX", market: "broad market", rotation: "rotation", chips: "chips alone", unknown: "unknown" };
   const CAT_TEXT = { yes: "Yes", starting: "Starting", "not yet": "Not yet", unknown: "Unknown" };
   const SCHEDULE_NY = ["06:00", "16:25"];  // mirrors meridian-clock schedule.json
   const GRACE_MINUTES = 60;
@@ -608,10 +617,18 @@
     $("tally-legend").innerHTML = keys.map((k) => `<div><i class="${TALLY[k][0]}"></i><span>${esc(TALLY[k][1])}</span><b>${tally.counts[k]}</b></div>`).join("");
     $("tally-summary").textContent = tally.summary;
     if (!tally.days.length) { $("tally-more").hidden = true; return; }
-    $("tally-days").innerHTML = tally.days.map((d) => `<div class="tday">
-      <span>${esc(dayLabel(d.date))}<span class="tag ${TALLY[d.driver][0]}">${esc(TAG[d.driver] || d.driver)}</span>${d.provisional ? `<span class="tag pending">provisional</span>` : ""}</span>
-      <span class="tday-move">${signed(d.soxx_pct, 1)}%</span>
-      <span class="tday-detail">${esc(d.detail)}</span></div>`).join("");
+    $("tally-days").innerHTML = tally.days.map((d) => {
+      const n = d.news;
+      const news = n ? `<div class="tday-news"><b>${esc(NEWS[n.category] || n.category)}:</b> ${esc(n.summary)}${(n.evidence || []).map((e) => `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.time)} · ${esc(e.headline)}</a>`).join("")}</div>` : "";
+      const also = (d.moved || []).filter((m) => m !== d.driver).map((m) => TAG[m] || m);
+      return `<div class="tday">
+        <span>${esc(dayLabel(d.date))}<span class="tag ${TALLY[d.driver][0]}">${esc(TAG[d.driver] || d.driver)}</span>${d.provisional ? `<span class="tag pending">provisional</span>` : ""}</span>
+        <span class="tday-move">${signed(d.soxx_pct, 1)}%</span>
+        <span class="tday-detail">${esc(d.detail)}${also.length ? ` · also moved: ${esc(also.join(", "))}` : ""}</span>
+        ${news}
+        ${d.news_flag ? `<span class="tday-flag">⚠ ${esc(d.news_flag)}</span>` : ""}
+      </div>`;
+    }).join("");
   }
 
   // --- Everything else -------------------------------------------------------------------------

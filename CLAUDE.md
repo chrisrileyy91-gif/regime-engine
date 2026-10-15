@@ -26,7 +26,8 @@ records a day later.
 | KOSPI, Samsung | EODHD end-of-day (2–3h after close) → KRX Open API (next day) | Yahoo ±0.1% | — |
 | Company filings | SEC EDGAR XBRL companyconcept (each company's own 10-Q/10-K) | — | entity-name check per CIK |
 | Chip stock prices | Alpaca SIP quarter-end closes (earnings-vs-price catalyst only) | — | — |
-| Tally-only | Cboe TNX/TYX daily high and TYX close; Alpaca SIP RSP | — | — |
+| Tally-only | Cboe TNX/TYX daily high and TYX close; Alpaca SIP RSP, USO (oil), UUP (dollar) | — | — |
+| Headlines | Benzinga via Alpaca news API (same keys), labelled by Claude from the list only | cited ids must exist | — |
 
 Statuses: **VERIFIED** (a confirming source has the same date and agrees) · **OFFICIAL**
 (official record, not yet confirmed) · **UNCONFIRMED** (vendor record nothing confirmed →
@@ -70,7 +71,8 @@ cached; quarters; phases; catalysts) → `service.py` (payload) → `snapshot.py
   16:15 VIX settle, plus the free SIP 15-minute rule). Both call `publish.yml`.
 - Never add `schedule:` blocks; the clock is the only scheduler.
 - State on the `snapshots` release: `regime.json`, `history.json`, `krx_cache.json`,
-  `claude_usage.json`, `sec_cache.json` (filings, refreshed at most every 20h), `claude_fills.json`.
+  `claude_usage.json`, `sec_cache.json` (filings, refreshed at most every 20h), `claude_fills.json`,
+  `news_cache.json`.
   Never in
   git. A failed download of an existing asset must stop the run.
 - Secrets: `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `ANTHROPIC_API_KEY`, `DISCORD_PHEME_WEBHOOK`,
@@ -128,8 +130,17 @@ software group it alone faked an acceleration on the first real read.
   4. **rotation** (software up) / **chips** (software down) — the residual: no gauge moved.
   A row is "unknown" unless every gauge that could claim it is present. The newest row is
   `provisional` (not counted) while any of its official closes are missing; 06:00 finalizes it.
-  The page must never say "no macro trigger": gauges see moves, not news, oil, policy or levels
+  The page must never say "no macro trigger": gauges see moves, not news, policy or levels
   (Aug 18 "yields rattle markets" was the 30Y LEVEL at a 2007 high; its move was +1.7 bps).
+- Oil (USO, |z| ≥ 2 vs prior 60 sessions) and dollar (UUP, z ≥ +2) gauges sit after rates. USO
+  and UUP are what Crude Logic (frack-around) already uses after Yahoo's CL=F broke; EIA's official
+  WTI spot posts in weekly batches, too late for same day. `moved` lists every gauge that moved.
+- Headlines (`app/news.py`): for each tally day, Alpaca/Benzinga headlines tagged to NVDA, AVGO,
+  AMD, MU, TSM, ASML, INTC, SOXX, SMH, SPY, QQQ from the prior 16:00 ET to that day's 16:00 ET.
+  Claude (no web search) picks one category and must cite headline ids from the list; any unknown
+  id, unknown category or uncited pick is rejected and not cached. Finished days are labelled once
+  (`news_cache.json`). Headlines never change the gauge label; disagreement sets `news_flag`
+  ("headlines point to the Fed, but no macro gauge moved", or the reverse). Links are http(s) only.
 - Real-data check (Oct 14, all 20 days recomputed from Cboe/Yahoo): rates 1 (+ Oct 14 provisional),
   fear 2, market 0, rotation 7, chips 9. Spot checks: Jul 28 (China competition, financing) and
   Sep 14 (AI-policy worries, software +5%) were chip stories; Oct 14 was CPI.
@@ -149,6 +160,10 @@ software group it alone faked an acceleration on the first real read.
 - Old EPS facts are not split-adjusted unless a later filing restated them; the earnings catalyst
   only uses the latest two years, which are post-split for NVDA and AVGO. Watch for new splits.
 - Group membership is a judgment call (who counts as "software"). Changing it changes the read.
+- Headlines are one feed (Benzinga) and Claude's label is a reading of them, not a fact. The cited
+  headlines are shown so every label can be checked; a wrong label shows up as a mismatch with them.
+- USO tracks front-month WTI futures (roll effects), not spot; UUP tracks the dollar-index futures.
+  Both are proxies, chosen because they print same-day on the consolidated tape.
 - EFFR is published the next morning and changes only at FOMC decisions. On a decision day the
   16:25 read still carries the pre-decision EFFR.
 - DXY is computed from FX quotes (EODHD free plan: 15-minute delay) with ICE's formula and must

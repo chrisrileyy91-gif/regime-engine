@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -118,6 +120,8 @@ class Catalyst(BaseModel):
     label: str
     status: str  # yes / starting / not yet / unknown
     detail: str
+    news: dict[str, Any] | None = None  # {category, summary, evidence[{headline, url, time}], confidence}
+    news_flag: str | None = None  # headlines and gauges disagree
 
 
 class CompanyFiling(BaseModel):
@@ -162,15 +166,20 @@ class Stress(BaseModel):
 class TallyDay(BaseModel):
     date: str
     soxx_pct: float
-    driver: str  # rates / fear / market / rotation / chips (nothing measured moved) / unknown
+    driver: str  # first gauge that moved: rates/oil/dollar/fear/market; else rotation/chips; or unknown
+    moved: list[str] = []  # every macro gauge that moved that day
     provisional: bool = False  # newest day still waiting for an official close; not counted
     tnx_bps: float | None = None
     tnx_spike_bps: float | None = None  # 10Y intraday high vs the prior close
     y30_bps: float | None = None
     vix_pct: float | None = None
     market_pct: float | None = None  # equal-weight S&P 500
+    oil_pct: float | None = None  # USO
+    dollar_pct: float | None = None  # UUP
     igv_pct: float | None = None
     detail: str
+    news: dict[str, Any] | None = None  # {category, summary, evidence[{headline, url, time}], confidence}
+    news_flag: str | None = None  # headlines and gauges disagree
 
 
 class Tally(BaseModel):
@@ -178,6 +187,7 @@ class Tally(BaseModel):
 
     days: list[TallyDay] = []
     counts: dict[str, int] = {}
+    news_counts: dict[str, int] = {}  # headline categories on the no-gauge days
     window_sessions: int = 0
     summary: str = ""
 

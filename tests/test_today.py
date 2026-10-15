@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -53,6 +54,8 @@ EVENTS = {  # index from the end -> what happens that day (each day semis fall 3
     -80: "rates_close",  # 10Y closes +15 bps
     -70: "rates_intraday",  # CPI-day pattern: 10Y +12 bps at the high, closes -3
     -60: "rates_30y",  # 30Y closes +12 bps, 10Y flat
+    -55: "oil",  # USO +8% on a quiet tape
+    -52: "dollar",  # UUP +1.5%
     -50: "fear",  # VIX +27%
     -40: "market",  # equal-weight S&P -2%
     -30: "rotation",  # nothing macro, software +2%
@@ -62,6 +65,9 @@ EVENTS = {  # index from the end -> what happens that day (each day semis fall 3
 
 def _tally_inputs(newest_drop: bool = False) -> tuple[dict, dict[str, pd.Series]]:
     soxx, igv, rsp, vix = [100.0] * N, [50.0] * N, [150.0] * N, [15.0] * N
+    rng = np.random.default_rng(3)
+    uso = list(80.0 * np.cumprod(1 + rng.normal(0, 0.01, N)))  # ~1% daily moves
+    uup = list(28.0 * np.cumprod(1 + rng.normal(0, 0.002, N)))  # ~0.2% daily moves
     y10 = [4.0] * N
     y30 = [4.5] * N
     y10_hi = [4.01] * N
@@ -84,18 +90,61 @@ def _tally_inputs(newest_drop: bool = False) -> tuple[dict, dict[str, pd.Series]
             y30_hi[i:] = [v + 0.12 for v in y30_hi[i:]]
         if kind == "fear":
             vix[i] = 19.0
+        if kind == "oil":
+            uso[i:] = [v * 1.08 for v in uso[i:]]
+        if kind == "dollar":
+            uup[i:] = [v * 1.015 for v in uup[i:]]
         if kind == "market":
             rsp[i:] = [v * 0.98 for v in rsp[i:]]
     results = market(soxx=series(soxx), igv=series(igv), y10=series(y10), vix=series(vix))
-    extras = {"market": series(rsp), "y10_high": series(y10_hi), "y30": series(y30), "y30_high": series(y30_hi)}
+    extras = {
+        "market": series(rsp),
+        "y10_high": series(y10_hi),
+        "y30": series(y30),
+        "y30_high": series(y30_hi),
+        "oil": series(uso),
+        "dollar": series(uup),
+    }
     return results, extras
 
 
 def test_tally_classifies_each_drop_by_what_moved_that_day() -> None:
     results, extras = _tally_inputs()
     t = tally(verify_all(results, TODAY.date()), extras)
-    assert [d.driver for d in t.days] == ["chips", "rotation", "market", "fear", "rates", "rates", "rates"]
-    assert t.counts == {"rates": 3, "fear": 1, "market": 1, "rotation": 1, "chips": 1}
+    assert [d.driver for d in t.days] == [
+        "chips",
+        "rotation",
+        "market",
+        "fear",
+        "dollar",
+        "oil",
+        "rates",
+        "rates",
+        "rates",
+    ]
+    assert t.counts == {"rates": 3, "oil": 1, "dollar": 1, "fear": 1, "market": 1, "rotation": 1, "chips": 1}
+
+
+def test_missing_oil_means_nothing_below_it_can_claim_the_day() -> None:
+    results, extras = _tally_inputs()
+    del extras["oil"]
+    drivers = [d.driver for d in tally(verify_all(results, TODAY.date()), extras).days]
+    assert drivers.count("rates") == 3 and set(drivers) == {"rates", "unknown"}
+
+
+def test_headlines_annotate_and_flag_disagreement_without_changing_the_gauge() -> None:
+    results, extras = _tally_inputs()
+    days = tally(verify_all(results, TODAY.date()), extras).days
+    chips_day, rates_day = days[0].date, days[-1].date
+    news = {
+        chips_day: {"category": "fed", "summary": "Fed speaker hints at another hike.", "evidence": []},
+        rates_day: {"category": "ai_demand", "summary": "Hyperscaler cuts capex guide.", "evidence": []},
+    }
+    t = tally(verify_all(results, TODAY.date()), extras, news)
+    assert t.days[0].driver == "chips" and "Headlines point to the Fed" in (t.days[0].news_flag or "")
+    assert t.days[-1].driver == "rates" and "headlines point to AI-demand worries" in (t.days[-1].news_flag or "")
+    assert t.news_counts == {"fed": 1, "unlabelled": 1}
+    assert "disagree" in t.summary
 
 
 def test_intraday_yield_spike_that_reversed_counts_as_rates() -> None:

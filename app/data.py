@@ -53,9 +53,9 @@ from app.config import (
     KRX_BASE_URL,
     KRX_HISTORY_SESSIONS,
     KRX_MAX_CALLS_PER_RUN,
-    MARKET_TICKER,
     NYFED_EFFR_URL,
     SECRET_ENV_VARS,
+    TALLY_TICKERS,
     TREASURY_CSV_URL,
     US_SESSION_DONE_NY,
     USER_AGENT,
@@ -470,7 +470,7 @@ async def fetch_ecb(client: httpx.AsyncClient) -> FetchResult:
 
 async def fetch_alpaca(client: httpx.AsyncClient) -> list[FetchResult]:
     targets = {"soxx@alpaca": "SOXX", "igv@alpaca": "IGV"}
-    targets.update({f"{t.lower()}@alpaca": t for t in (*CYCLE_PRICE_TICKERS, MARKET_TICKER)})
+    targets.update({f"{t.lower()}@alpaca": t for t in (*CYCLE_PRICE_TICKERS, *TALLY_TICKERS.values())})
     key_id, secret = os.environ.get("APCA_API_KEY_ID"), os.environ.get("APCA_API_SECRET_KEY")
     if not key_id or not secret:
         return [

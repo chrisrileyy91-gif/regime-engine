@@ -44,7 +44,27 @@ from app.config import (
 from app.data import get_with_retry, redact
 
 NY = ZoneInfo("America/New_York")
-NewsCache = dict[str, dict[str, Any]]  # {YYYY-MM-DD: {category, summary, evidence[], ...}}
+NewsCache = dict[str, dict[str, Any]]  # {YYYY-MM-DD: {category, summary, evidence[], ...} | {failed, last_try}}
+MAX_ATTEMPTS = 3  # a day whose answer keeps failing is retried once a day, then left unread
+LABEL_TOOL: dict[str, Any] = {
+    "name": "label_day",
+    "description": "Record the one category that best explains the chip sell-off, citing headline ids.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "category": {"type": "string", "enum": list(NEWS_CATEGORIES)},
+            "summary": {"type": "string", "description": "What the cited headlines say, 20 words or fewer."},
+            "evidence": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 3,
+                "description": "Ids of the headlines that support the category (empty only for none_clear).",
+            },
+            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        },
+        "required": ["category", "summary", "evidence", "confidence"],
+    },
+}
 
 
 def session_window(day: str) -> tuple[datetime, datetime]:
@@ -136,21 +156,37 @@ def build_prompt(day: str, soxx_pct: float, gauges: str, headlines: list[dict[st
         "over a single company. The summary must restate what the cited headlines say, in 20 words or "
         "fewer, with no added facts.\n\n"
         f"Headlines:\n{lines}\n\n"
-        'Answer with JSON only: {"category": "...", "summary": "...", "evidence": ["id", ...], '
-        '"confidence": "high|medium|low"}'
+        "Record your answer with the label_day tool."
     )
+
+
+def _answer(payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+    """The label_day tool call (the forced, structured answer), else JSON in the text."""
+    blocks = payload.get("content") or []
+    for block in blocks:
+        if block.get("type") == "tool_use" and block.get("name") == LABEL_TOOL["name"]:
+            data = block.get("input")
+            return (data, "") if isinstance(data, dict) else (None, "tool call without an input object")
+    text = "\n".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group(0))
+            if isinstance(data, dict):
+                return data, ""
+        except json.JSONDecodeError:
+            pass
+    stop = payload.get("stop_reason")
+    kinds = ",".join(str(b.get("type")) for b in blocks) or "none"
+    snippet = redact(" ".join(text.split())[:120])
+    return None, f"no structured answer; stop_reason={stop}, blocks={kinds}, text starts {snippet!r}"
 
 
 def parse_label(payload: dict[str, Any], headlines: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str]:
     """Validate Claude's answer against the headlines it was given. Returns (label, problem)."""
-    text = "\n".join(b.get("text", "") for b in payload.get("content") or [] if b.get("type") == "text")
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not match:
-        return None, "no JSON in the answer"
-    try:
-        answer = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None, "unreadable JSON"
+    answer, problem = _answer(payload)
+    if answer is None:
+        return None, problem
     category = str(answer.get("category", ""))
     if category not in NEWS_CATEGORIES:
         return None, f"unknown category {category!r}"
@@ -177,7 +213,13 @@ def parse_label(payload: dict[str, Any], headlines: list[dict[str, Any]]) -> tup
 async def _classify(client: httpx.AsyncClient, api_key: str, prompt: str) -> tuple[dict[str, Any] | None, str, str]:
     headers = {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json"}
     for model in (CLAUDE_MODEL, CLAUDE_FALLBACK_MODEL):
-        body = {"model": model, "max_tokens": 400, "messages": [{"role": "user", "content": prompt}]}
+        body = {
+            "model": model,
+            "max_tokens": 1024,
+            "tools": [LABEL_TOOL],
+            "tool_choice": {"type": "tool", "name": LABEL_TOOL["name"]},
+            "messages": [{"role": "user", "content": prompt}],
+        }
         response = await client.post(ANTHROPIC_URL, json=body, headers=headers, timeout=CLAUDE_TIMEOUT_SECONDS)
         if response.status_code in (400, 404) and model == CLAUDE_MODEL:
             continue
@@ -203,7 +245,17 @@ async def update_news(
 ) -> list[str]:
     """Label each (day, soxx_pct, gauges) not yet in the cache. Returns notes. Mutates cache/usage."""
     now_ny = now_ny or datetime.now(NY)
-    todo = [d for d in days if d[0] not in cache and session_complete(d[0], now_ny)][:NEWS_MAX_DAYS_PER_RUN]
+    today = now_ny.date().isoformat()
+
+    def due(day: str) -> bool:
+        entry = cache.get(day)
+        if entry is None:
+            return True
+        if "category" in entry:
+            return False
+        return int(entry.get("failed", 0)) < MAX_ATTEMPTS and entry.get("last_try") != today
+
+    todo = [d for d in days if due(d[0]) and session_complete(d[0], now_ny)][:NEWS_MAX_DAYS_PER_RUN]
     if not todo:
         return []
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -241,7 +293,9 @@ async def update_news(
             month["calls"] = month["calls"] + 1
             label, problem = parse_label(payload, headlines)
             if label is None:
-                notes.append(f"Headlines for {day}: answer rejected ({problem})")
+                failed = int((cache.get(day) or {}).get("failed", 0)) + 1
+                cache[day] = {"failed": failed, "last_try": today, "problem": problem}
+                notes.append(f"Headlines for {day}: answer rejected ({problem}); attempt {failed} of {MAX_ATTEMPTS}")
                 continue
             label["model"] = model
             label["labelled_at"] = now_ny.isoformat(timespec="minutes")

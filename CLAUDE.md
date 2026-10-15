@@ -70,6 +70,8 @@ cached; quarters; phases; catalysts) → `service.py` (payload) → `snapshot.py
   picks up the overnight Korea session) and `regime-close.yml` (16:25 NY: 16:00 closing auction,
   16:15 VIX settle, plus the free SIP 15-minute rule). Both call `publish.yml`.
 - Never add `schedule:` blocks; the clock is the only scheduler.
+- Runners are pinned to `ubuntu-24.04` (ubuntu-latest moves to 26 on Oct 19, 2026). Move the pin
+  deliberately, with a test run, not by surprise.
 - State on the `snapshots` release: `regime.json`, `history.json`, `krx_cache.json`,
   `claude_usage.json`, `sec_cache.json` (filings, refreshed at most every 20h), `claude_fills.json`,
   `news_cache.json`.
@@ -137,8 +139,11 @@ software group it alone faked an acceleration on the first real read.
   WTI spot posts in weekly batches, too late for same day. `moved` lists every gauge that moved.
 - Headlines (`app/news.py`): for each tally day, Alpaca/Benzinga headlines tagged to NVDA, AVGO,
   AMD, MU, TSM, ASML, INTC, SOXX, SMH, SPY, QQQ from the prior 16:00 ET to that day's 16:00 ET.
-  Claude (no web search) picks one category and must cite headline ids from the list; any unknown
-  id, unknown category or uncited pick is rejected and not cached. Finished days are labelled once
+  Claude (no web search) must answer through a forced `label_day` tool call (structured input; the
+  first version parsed prose and every reply ran out of tokens before its JSON). It picks one
+  category and must cite headline ids from the list; any unknown id, unknown category or uncited
+  pick is rejected. A rejected day records why (stop_reason, block types, first words) and is
+  retried at most once a day, three times, so a broken reply can't be re-billed every run. Finished days are labelled once
   (`news_cache.json`). Headlines never change the gauge label; disagreement sets `news_flag`
   ("headlines point to the Fed, but no macro gauge moved", or the reverse). Links are http(s) only.
 - Real-data check (Oct 14, all 20 days recomputed from Cboe/Yahoo): rates 1 (+ Oct 14 provisional),

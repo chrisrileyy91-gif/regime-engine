@@ -43,7 +43,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves to 26 on Oct 19, 2026
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -126,7 +126,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves to 26 on Oct 19, 2026
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

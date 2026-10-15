@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
@@ -76,7 +77,7 @@ def test_valid_label_keeps_cited_headlines_with_links() -> None:
         ('{"category": "ai_demand", "summary": "x", "evidence": ["99"]}', "wasn't in the list"),
         ('{"category": "aliens", "summary": "x", "evidence": ["1"]}', "unknown category"),
         ('{"category": "company", "summary": "x", "evidence": []}', "without citing"),
-        ("I think it was chips.", "no JSON"),
+        ("I think it was chips.", "no structured answer"),
     ],
 )
 def test_invalid_labels_are_rejected(answer: str, problem: str) -> None:
@@ -115,15 +116,62 @@ async def test_unfinished_session_is_not_labelled(keys: None) -> None:
     assert await update_news(cache, [(DAY, -4.8, "quiet")], {}, now) == [] and cache == {}
 
 
+def tool(answer: dict) -> dict:
+    return {
+        "content": [{"type": "tool_use", "id": "t1", "name": "label_day", "input": answer}],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 3000, "output_tokens": 60},
+    }
+
+
+def test_forced_tool_answer_is_read() -> None:
+    label, problem = parse_label(
+        tool({"category": "policy", "summary": "New export rule.", "evidence": ["2"], "confidence": "medium"}),
+        HEADLINES,
+    )
+    assert problem == "" and label is not None and label["category"] == "policy"
+
+
+def test_truncated_prose_reply_reports_why() -> None:
+    """Oct 14, all 20 days: the reply ran out of tokens in prose before any JSON."""
+    payload = {
+        "content": [{"type": "text", "text": "Looking at these headlines, several themes emerge. First,"}],
+        "stop_reason": "max_tokens",
+    }
+    label, problem = parse_label(payload, HEADLINES)
+    assert label is None and "stop_reason=max_tokens" in problem and "Looking at these" in problem
+
+
 @respx.mock
-async def test_rejected_answer_is_not_cached(keys: None) -> None:
+async def test_request_forces_the_structured_tool(keys: None) -> None:
     respx.get(ALPACA_NEWS_URL).mock(return_value=httpx.Response(200, json={"news": [article(1, "x", 5)]}))
-    respx.post(ANTHROPIC_URL).mock(
+    route = respx.post(ANTHROPIC_URL).mock(
+        return_value=httpx.Response(
+            200, json=tool({"category": "company", "summary": "x", "evidence": ["1"], "confidence": "low"})
+        )
+    )
+    cache: dict = {}
+    await update_news(cache, [(DAY, -4.8, "quiet")], {}, datetime(2026, 7, 29, 6, tzinfo=NY))
+    body = json.loads(route.calls[0].request.content)
+    assert body["tool_choice"] == {"type": "tool", "name": "label_day"} and body["max_tokens"] >= 1024
+    assert cache[DAY]["category"] == "company"
+
+
+@respx.mock
+async def test_failed_day_is_retried_once_a_day_then_left(keys: None) -> None:
+    respx.get(ALPACA_NEWS_URL).mock(return_value=httpx.Response(200, json={"news": [article(1, "x", 5)]}))
+    route = respx.post(ANTHROPIC_URL).mock(
         return_value=httpx.Response(200, json=claude('{"category": "company", "summary": "x", "evidence": ["7"]}'))
     )
     cache: dict = {}
-    notes = await update_news(cache, [(DAY, -4.8, "quiet")], {}, datetime(2026, 7, 29, 6, tzinfo=NY))
-    assert cache == {} and any("rejected" in n for n in notes)
+    day1 = datetime(2026, 7, 29, 6, tzinfo=NY)
+    notes = await update_news(cache, [(DAY, -4.8, "quiet")], {}, day1)
+    assert "category" not in cache[DAY] and cache[DAY]["failed"] == 1 and any("rejected" in n for n in notes)
+    await update_news(cache, [(DAY, -4.8, "quiet")], {}, day1.replace(hour=16, minute=25))
+    assert route.call_count == 1  # not re-asked the same day
+    for offset in (1, 2, 3):
+        await update_news(cache, [(DAY, -4.8, "quiet")], {}, day1 + timedelta(days=offset))
+    assert route.call_count == 3 and cache[DAY]["failed"] == 3  # gives up after three days
 
 
 @respx.mock

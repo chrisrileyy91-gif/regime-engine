@@ -198,3 +198,10 @@ def test_overnight_missing_input_is_blank() -> None:
     results = {k: v for k, v in results.items() if not k.startswith("dxy@")}
     items = {i.label: i for i in overnight(verify_all(results, TODAY.date()))}
     assert items["Dollar index"].value is None and items["Dollar index"].date is None
+
+
+def test_a_failed_headline_read_is_not_shown_as_a_label() -> None:
+    results, extras = _tally_inputs()
+    first = tally(verify_all(results, TODAY.date()), extras).days[0].date
+    t = tally(verify_all(results, TODAY.date()), extras, {first: {"failed": 1, "last_try": "x", "problem": "y"}})
+    assert t.days[0].news is None and t.news_counts == {"unlabelled": 2}

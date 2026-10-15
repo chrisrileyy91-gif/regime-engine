@@ -204,7 +204,8 @@ def tally(
         if missing:
             parts.append(f"missing: {', '.join(missing)}")
         date = str(pd.Timestamp(str(ts)).date())
-        label = news.get(date)
+        entry = news.get(date)
+        label = entry if entry and "category" in entry else None  # failed reads carry no label
         days.append(
             TallyDay(
                 date=date,

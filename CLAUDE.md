@@ -26,6 +26,7 @@ records a day later.
 | KOSPI, Samsung | EODHD end-of-day (2–3h after close) → KRX Open API (next day) | Yahoo ±0.1% | — |
 | Company filings | SEC EDGAR XBRL companyconcept (each company's own 10-Q/10-K) | — | entity-name check per CIK |
 | Chip stock prices | Alpaca SIP quarter-end closes (earnings-vs-price catalyst only) | — | — |
+| Tally-only | Cboe TNX/TYX daily high and TYX close; Alpaca SIP RSP | — | — |
 
 Statuses: **VERIFIED** (a confirming source has the same date and agrees) · **OFFICIAL**
 (official record, not yet confirmed) · **UNCONFIRMED** (vendor record nothing confirmed →
@@ -69,7 +70,8 @@ cached; quarters; phases; catalysts) → `service.py` (payload) → `snapshot.py
   16:15 VIX settle, plus the free SIP 15-minute rule). Both call `publish.yml`.
 - Never add `schedule:` blocks; the clock is the only scheduler.
 - State on the `snapshots` release: `regime.json`, `history.json`, `krx_cache.json`,
-  `claude_usage.json`, `sec_cache.json` (filings, refreshed at most every 20h). Never in
+  `claude_usage.json`, `sec_cache.json` (filings, refreshed at most every 20h), `claude_fills.json`.
+  Never in
   git. A failed download of an existing asset must stop the run.
 - Secrets: `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `ANTHROPIC_API_KEY`, `DISCORD_PHEME_WEBHOOK`,
   `SEC_USER_AGENT` ("regime-engine <contact email>"; SEC refuses anonymous clients); optional
@@ -117,10 +119,22 @@ software group it alone faked an acceleration on the first real read.
 ## Today (daily)
 - Drivers (same session only): 10Y +10 bps or z > 1.5 · VIX > 20 · SOXX RSI < 40.
 - Stress: 0 active = Calm, 1 = Elevated, 2+ or VIX > 30 = Stressed, all unknown = Unknown.
-- Tally: the last 20 sessions with SOXX ≤ −1.5%, each tagged in order: yields (10Y +10 bps or
-  z ≥ 1.5), volatility (VIX +10% that day), whole market (SPY ≤ −1% that day, Alpaca SIP), else
-  chip-specific. Chip-specific is a residual (nothing measured moved) and is never claimed when a
-  check is missing. VIX is partly reflexive, so "volatility" days describe, they don't cause.
+- Tally: the last 20 sessions with SOXX ≤ −1.5%, each tagged in order:
+  1. **rates** — 10Y or 30Y up ≥ 10 bps at the close OR at the intraday high vs the prior close, or a
+     10Y close z ≥ 1.5. Intraday is required: CPI day Oct 14 the 10Y rose 11.2 bps by its high and
+     closed −2.7; a close-to-close test misses it entirely.
+  2. **fear** — VIX close ≥ +10%.  3. **market** — equal-weight S&P 500 (RSP) ≤ −1%. Not SPY: chips
+     are a big slice of SPY, so a semis rout drags it (Oct 14 SPY −1.1%; Sep 14 SPY −0.5%, RSP +0.1%).
+  4. **rotation** (software up) / **chips** (software down) — the residual: no gauge moved.
+  A row is "unknown" unless every gauge that could claim it is present. The newest row is
+  `provisional` (not counted) while any of its official closes are missing; 06:00 finalizes it.
+  The page must never say "no macro trigger": gauges see moves, not news, oil, policy or levels
+  (Aug 18 "yields rattle markets" was the 30Y LEVEL at a 2007 high; its move was +1.7 bps).
+- Real-data check (Oct 14, all 20 days recomputed from Cboe/Yahoo): rates 1 (+ Oct 14 provisional),
+  fear 2, market 0, rotation 7, chips 9. Spot checks: Jul 28 (China competition, financing) and
+  Sep 14 (AI-policy worries, software +5%) were chip stories; Oct 14 was CPI.
+- Claude fills are cached (`claude_fills.json`, 30 days) and re-checked against Yahoo and vetoes
+  before reuse, so a value found at 09:50 isn't lost when the 16:25 search comes up empty.
 - Alpaca daily bars dated today are dropped until 16:20 NY: a manual run at 09:50 once recorded a
   partial session as a VERIFIED close (Yahoo's bar was equally partial).
 - DXY, KOSPI and Samsung are telemetry only (`used_in_call=False`): their gaps never degrade the read.

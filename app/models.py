@@ -162,9 +162,13 @@ class Stress(BaseModel):
 class TallyDay(BaseModel):
     date: str
     soxx_pct: float
-    driver: str  # rates / fear / chips (nothing macro moved) / unknown
+    driver: str  # rates / fear / market / rotation / chips (nothing measured moved) / unknown
+    provisional: bool = False  # newest day still waiting for an official close; not counted
     tnx_bps: float | None = None
+    tnx_spike_bps: float | None = None  # 10Y intraday high vs the prior close
+    y30_bps: float | None = None
     vix_pct: float | None = None
+    market_pct: float | None = None  # equal-weight S&P 500
     igv_pct: float | None = None
     detail: str
 

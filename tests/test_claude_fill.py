@@ -268,3 +268,37 @@ async def test_fill_flows_through_to_the_published_payload(api_key: None) -> Non
     kospi = next(i for i in status.data_quality.inputs if i.key == "kospi")
     assert kospi.status == "VERIFIED" and kospi.source == "Claude web search (reuters.com)"
     assert any("filled by Claude" in i.message for i in status.data_quality.issues)
+
+
+# --- the fill cache ------------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_cached_fill_is_reused_without_calling_claude(api_key: None) -> None:
+    """16:25 run, Oct 14: the 09:50 run's KOSPI fill was lost and the second search came up empty."""
+    results = korea_missing()
+    route = respx.post(ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=claude_payload(kospi_answer(yahoo_kospi(results))))
+    )
+    cache: dict = {}
+    usage: dict = {}
+    first = await fill_gaps(verify_all(results, TODAY.date()), results, usage, now_ny=after_close(), cache=cache)
+    assert "kospi" in first.fills and cache["kospi"][TODAY_STR]["value"] == pytest.approx(yahoo_kospi(results))
+    second = await fill_gaps(verify_all(results, TODAY.date()), results, usage, now_ny=after_close(), cache=cache)
+    assert route.call_count == 1 and "kospi" in second.fills
+    assert any("reused" in n for n in second.notes)
+
+
+async def test_cached_fill_that_no_longer_agrees_is_not_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    results = korea_missing()
+    cache = {"kospi": {TODAY_STR: {"value": yahoo_kospi(results) * 1.05, "source_url": "https://x.example/k"}}}
+    report = await fill_gaps(verify_all(results, TODAY.date()), results, {}, now_ny=after_close(), cache=cache)
+    assert report.fills == {}
+
+
+def test_cache_keeps_thirty_days() -> None:
+    old = (after_close() - pd.Timedelta(days=40)).date().isoformat()
+    cache = {"kospi": {old: {"value": 1.0}}}
+    cf._remember(cache, {}, after_close())
+    assert cache == {}

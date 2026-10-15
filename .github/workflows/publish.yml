@@ -64,7 +64,7 @@ jobs:
             # The release exists, so a failed download must stop the run rather than
             # publish over the stored history with an empty one.
             assets=$(gh release view "$RELEASE" --json assets -q '.assets[].name')
-            for f in regime.json history.json krx_cache.json claude_usage.json sec_cache.json; do
+            for f in regime.json history.json krx_cache.json claude_usage.json sec_cache.json claude_fills.json; do
               if grep -qx "$f" <<< "$assets"; then
                 gh release download "$RELEASE" --pattern "$f" --dir state --clobber
               fi
@@ -91,7 +91,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "$RELEASE" state/regime.json state/history.json state/krx_cache.json \
-            state/claude_usage.json state/sec_cache.json --clobber
+            state/claude_usage.json state/sec_cache.json state/claude_fills.json --clobber
 
       - name: Alert Pheme if the read is degraded, stale or missing
         if: always()

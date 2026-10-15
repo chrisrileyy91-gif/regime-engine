@@ -145,3 +145,15 @@ def test_korea_missing_warns_but_does_not_degrade_the_call() -> None:
 @pytest.mark.parametrize("key", list(INPUTS))
 def test_every_input_has_a_record_source(key: str) -> None:
     assert INPUTS[key].record
+
+
+def test_telemetry_gaps_are_info_not_warnings() -> None:
+    """The banner listed DXY/KOSPI/Samsung (optional keys unset) as warnings on every run."""
+    from app.verify import assess
+
+    results = market()
+    for key in [k for k in results if k.startswith(("kospi@", "samsung@", "dxy@"))]:
+        results[key] = failed(key, "not configured")
+    quality = assess(verify_all(results, TODAY.date()))
+    assert quality.status == "OK"
+    assert not [i for i in quality.issues if i.severity == "warn"]

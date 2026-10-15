@@ -34,6 +34,7 @@ from app.config import (
     CBOE_HISTORY_URL,
     CBOE_INDEXES,
     CBOE_QUOTE_URL,
+    CBOE_TALLY,
     CBOE_VIX_CSV_URL,
     CYCLE_PRICE_TICKERS,
     DXY_CONSTANT,
@@ -179,6 +180,16 @@ def parse_cboe_history(payload: dict[str, Any], scale: float) -> pd.Series:
         raise DataError("Cboe history returned no rows")
     index = pd.to_datetime([r["date"] for r in rows])
     values = pd.to_numeric(pd.Series([r.get("close") for r in rows], dtype="object"), errors="coerce")
+    return _clean(pd.Series(values.to_numpy(dtype=float) / scale, index=index))
+
+
+def parse_cboe_highs(payload: dict[str, Any], scale: float) -> pd.Series:
+    """Each session's intraday high from Cboe's daily history."""
+    rows = payload.get("data") or []
+    if not rows:
+        raise DataError("Cboe history returned no rows")
+    index = pd.to_datetime([r["date"] for r in rows])
+    values = pd.to_numeric(pd.Series([r.get("high") for r in rows], dtype="object"), errors="coerce")
     return _clean(pd.Series(values.to_numpy(dtype=float) / scale, index=index))
 
 
@@ -395,6 +406,23 @@ async def fetch_cboe_index(client: httpx.AsyncClient, key: str) -> FetchResult:
         return FetchResult(key, f"^{symbol}", "cboe", None, _error(exc), details)
 
 
+async def fetch_cboe_tally(client: httpx.AsyncClient) -> list[FetchResult]:
+    """Closes and intraday highs for the tally (10Y high, 30Y close and high). Classification only."""
+    out = []
+    for name, (symbol, scale) in CBOE_TALLY.items():
+        keys = [f"{name}_high@cboe"] if name == "y10" else [f"{name}@cboe", f"{name}_high@cboe"]
+        try:
+            payload = (await get_with_retry(client, CBOE_HISTORY_URL.format(symbol=symbol))).json()
+            series = {
+                f"{name}@cboe": parse_cboe_history(payload, scale),
+                f"{name}_high@cboe": parse_cboe_highs(payload, scale),
+            }
+            out += [FetchResult(k, f"^{symbol}", "cboe", series[k]) for k in keys]
+        except Exception as exc:
+            out += [FetchResult(k, f"^{symbol}", "cboe", None, _error(exc)) for k in keys]
+    return out
+
+
 async def fetch_eodhd(client: httpx.AsyncClient) -> list[FetchResult]:
     token = os.environ.get("EODHD_API_KEY")
     keys = [*EODHD_EOD_SYMBOLS, "dxy@eodhd"]
@@ -570,7 +598,11 @@ async def fetch_all(
             *(fetch_yahoo(client, k, s) for k, s in YAHOO_SYMBOLS.items()),
         )
         groups = await asyncio.gather(
-            fetch_treasury(client), fetch_alpaca(client), fetch_eodhd(client), fetch_krx(client, cache)
+            fetch_treasury(client),
+            fetch_alpaca(client),
+            fetch_eodhd(client),
+            fetch_krx(client, cache),
+            fetch_cboe_tally(client),
         )
     finally:
         if owns_client:

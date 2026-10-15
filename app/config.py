@@ -20,7 +20,7 @@ class Thresholds:
     vix_level: float = 20.0  # volatility high enough to force systematic de-risking
     semi_rsi_digestion: float = 40.0  # SOXX RSI(14) below this = chip momentum broken
     vix_jump_pct: float = 10.0  # tally: VIX up this much on a semis down day = market-wide fear
-    market_drop_pct: float = -1.0  # tally: SPY down this much the same day = broad selling
+    market_drop_pct: float = -1.0  # tally: equal-weight S&P 500 down this much the same day = broad selling
 
     # --- Backdrop and telemetry (shown, never counted as stress) -----------------------------
     tnx_pctile_high: float = 80.0  # 10Y higher than this % of the trailing window
@@ -253,9 +253,14 @@ CYCLE_HISTORY_QUARTERS = 12
 # Chip stock prices for "earnings vs price": quarter-end closes from the Alpaca SIP feed, fetched
 # with SOXX/IGV. Not cross-checked (a quarterly comparison, never part of the daily call).
 CYCLE_PRICE_TICKERS = tuple(t for t, _, _ in CYCLE_COMPANIES["chips"])
-# The broad market, for the tally: a semis drop on a day SPY also fell is market-wide selling, not
-# chip-specific. Alpaca SIP, fetched with SOXX, not cross-checked (classification only).
-MARKET_TICKER = "SPY"
+# The broad market, for the tally. Equal-weight (RSP), not SPY: chips are a large slice of the
+# cap-weighted index, so a semis rout drags SPY by itself (Oct 14: SOXX -4.5%, SPY -1.1%; Sep 14:
+# SPY -0.5% while RSP +0.1%). Alpaca SIP, fetched with SOXX, not cross-checked (classification only).
+MARKET_TICKER = "RSP"
+# Tally-only Cboe series (official, not cross-checked; classification only). Close-to-close data
+# misses a yield spike that reverses: on CPI day Oct 14 the 10Y rose 11 bps intraday and closed -3.
+# The 30Y catches long-end shocks the 10Y misses (Aug 18: 30Y at its highest since 2007).
+CBOE_TALLY = {"y10": ("TNX", 10.0), "y30": ("TYX", 10.0)}
 
 
 @dataclass(frozen=True)

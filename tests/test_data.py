@@ -355,3 +355,16 @@ def test_unfinished_us_session_bar_is_dropped() -> None:
     after = datetime(2026, 10, 14, 16, 25, tzinfo=NY)
     assert list(drop_unfinished_us_session(bars, morning).index) == [idx[0]]
     assert len(drop_unfinished_us_session(bars, after)) == 2
+
+
+def test_cboe_history_highs() -> None:
+    from app.data import parse_cboe_highs
+
+    payload = {
+        "data": [
+            {"date": "2026-10-13", "high": "52.36", "close": "52.17"},
+            {"date": "2026-10-14", "high": "53.29", "close": "51.90"},
+        ]
+    }
+    highs = parse_cboe_highs(payload, 10.0)
+    assert highs.iloc[-1] == pytest.approx(5.329)

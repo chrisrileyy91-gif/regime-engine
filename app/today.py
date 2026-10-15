@@ -12,6 +12,7 @@ for months is backdrop, and must not keep the page in "high risk" for months.
 from __future__ import annotations
 
 from collections import Counter
+from typing import Any
 
 import pandas as pd
 
@@ -23,11 +24,21 @@ from app.verify import Verified
 
 STRESS_LABELS = {"CALM": "Calm", "ELEVATED": "Elevated", "STRESSED": "Stressed", "UNKNOWN": "Unknown"}
 TALLY_LABELS = {
-    "rates": "a yield jump",
-    "fear": "a volatility spike",
-    "market": "the whole market falling (S&P 500 down 1%+)",
-    "chips": "none of those (chip-specific selling)",
-    "unknown": "unknown (rates or VIX data missing)",
+    "rates": "yields jumped (10Y or 30Y, at the close or intraday)",
+    "fear": "VIX spiked",
+    "market": "the broad market fell (equal-weight S&P 500 down 1%+)",
+    "rotation": "no macro gauge moved, and software rose: money moved from chips to software",
+    "chips": "no macro gauge moved, and software fell too",
+    "unknown": "couldn't tell (a gauge was missing)",
+}
+TALLY_ORDER = ("rates", "fear", "market", "rotation", "chips", "unknown")
+TALLY_SHORT = {
+    "rates": "yields jumped",
+    "fear": "VIX spiked",
+    "market": "broad market fell",
+    "rotation": "rotation into software",
+    "chips": "chips alone",
+    "unknown": "couldn't tell",
 }
 
 
@@ -69,86 +80,169 @@ def _zscores(changes: pd.Series, window: int) -> pd.Series:
     return ((changes - baseline.mean()) / baseline.std(ddof=1)).dropna()
 
 
-def tally(verified: dict[str, Verified], market: pd.Series | None = None, t: Thresholds = THRESHOLDS) -> Tally:
-    """Tag each recent semis drop by what else moved: yields, then VIX, then the S&P 500.
+def _at(d: dict[Any, Any], ts: Any) -> float | None:
+    v = d.get(ts)
+    return None if v is None or pd.isna(v) else float(v)
 
-    "Chip-specific" is the residual: nothing we measure moved. It is the bucket the "valuations
-    questioned" headlines describe, but it also holds anything unmeasured (earnings, export rules).
+
+def tally(
+    verified: dict[str, Verified],
+    extras: dict[str, pd.Series] | None = None,
+    t: Thresholds = THRESHOLDS,
+) -> Tally:
+    """Tag each recent semis drop by what else moved that day, checked in order:
+
+    1. rates   10Y or 30Y up >= 10 bps at the close, or at its intraday high vs the prior close,
+               or an unusual 10Y close move (z >= 1.5). Intraday matters: on CPI day (Oct 14) the
+               10Y rose 11 bps by mid-session and closed down 3.
+    2. fear    VIX up >= 10% at the close.
+    3. market  equal-weight S&P 500 (RSP) down >= 1%.
+    4. rotation / chips   none of the above. Software up = rotation; software down = chips.
+
+    The last two are what is LEFT when no gauge moved. They do not prove there was no macro news:
+    oil, the dollar, policy headlines and company news are not measured. A day is "unknown" unless
+    every gauge that could have claimed it was available, and the newest day stays provisional
+    until all of its official closes have posted.
     """
+    extras = extras or {}
     soxx = _pct_changes(verified["soxx"].series if "soxx" in verified else None)
     if soxx.empty:
         return Tally(summary="Semis prices unavailable, so the tally can't be built.")
-    tnx = _bps_changes(verified["y10"].series if "y10" in verified else None)
-    tnx_z = _zscores(tnx, t.tnx_delta_z_window) if not tnx.empty else pd.Series(dtype=float)
+    y10_close = verified["y10"].series if "y10" in verified else None
+    y10 = _bps_changes(y10_close)
+    y10_z = _zscores(y10, t.tnx_delta_z_window) if not y10.empty else pd.Series(dtype=float)
+    y10_spike = _spike_bps(y10_close, extras.get("y10_high"))
+    y30 = _bps_changes(extras.get("y30"))
+    y30_spike = _spike_bps(extras.get("y30"), extras.get("y30_high"))
     vix = _pct_changes(verified["vix"].series if "vix" in verified else None)
     igv = _pct_changes(verified["igv"].series if "igv" in verified else None)
-    spy = _pct_changes(market)
+    mkt = _pct_changes(extras.get("market"))
+    maps = {
+        k: dict(v.items())
+        for k, v in (
+            ("y10", y10),
+            ("z", y10_z),
+            ("y10_spike", y10_spike),
+            ("y30", y30),
+            ("y30_spike", y30_spike),
+            ("vix", vix),
+            ("igv", igv),
+            ("mkt", mkt),
+        )
+    }
 
     drops = soxx[soxx <= TALLY_DROP_PCT].iloc[-TALLY_DAYS:]
-    tnx_d, tnx_zd, vix_d, igv_d, spy_d = (dict(x.items()) for x in (tnx, tnx_z, vix, igv, spy))
+    newest = soxx.index[-1]
     days = []
     for ts, move in drops.items():
-        bps, z, vchg, ichg, schg = (
-            None if d.get(ts) is None else float(d[ts]) for d in (tnx_d, tnx_zd, vix_d, igv_d, spy_d)
-        )
-        rates = None if bps is None else (bps >= t.tnx_1d_spike_bps or (z is not None and z >= t.tnx_delta_z))
-        fear = None if vchg is None else vchg >= t.vix_jump_pct
-        broad = None if schg is None else schg <= t.market_drop_pct
+        v = {k: _at(m, ts) for k, m in maps.items()}
+        rate_tests = [
+            None if v["y10"] is None else v["y10"] >= t.tnx_1d_spike_bps,
+            None if v["z"] is None else v["z"] >= t.tnx_delta_z,
+            None if v["y10_spike"] is None else v["y10_spike"] >= t.tnx_1d_spike_bps,
+            None if v["y30"] is None else v["y30"] >= t.tnx_1d_spike_bps,
+            None if v["y30_spike"] is None else v["y30_spike"] >= t.tnx_1d_spike_bps,
+        ]
+        rates = True if any(x is True for x in rate_tests) else (False if all(x is False for x in rate_tests) else None)
+        fear = None if v["vix"] is None else v["vix"] >= t.vix_jump_pct
+        broad = None if v["mkt"] is None else v["mkt"] <= t.market_drop_pct
         if rates:
             driver = "rates"
-        elif fear:
+        elif rates is False and fear:
             driver = "fear"
-        elif broad:
+        elif rates is False and fear is False and broad:
             driver = "market"
-        elif rates is False and fear is False and broad is False:
-            driver = "chips"
+        elif rates is False and fear is False and broad is False and v["igv"] is not None:
+            driver = "rotation" if v["igv"] > 0 else "chips"
         else:
             driver = "unknown"
-        parts = [
-            f"10Y {bps:+.0f} bps" if bps is not None else "10Y n/a",
-            f"VIX {vchg:+.0f}%" if vchg is not None else "VIX n/a",
+        missing = [
+            name
+            for name, key in (
+                ("10Y close", "y10"),
+                ("10Y intraday high", "y10_spike"),
+                ("30Y", "y30"),
+                ("30Y intraday high", "y30_spike"),
+                ("VIX close", "vix"),
+                ("equal-weight S&P", "mkt"),
+                ("software", "igv"),
+            )
+            if v[key] is None
         ]
-        parts.append(f"S&P 500 {schg:+.1f}%" if schg is not None else "S&P 500 n/a")
-        if ichg is not None:
-            parts.append(f"software {ichg:+.1f}%")
+        # A row is final once every gauge for its date is in; the newest row may still be waiting.
+        provisional = bool(missing) and ts == newest
+        parts = [
+            _fmt_bps("10Y", v["y10"], v["y10_spike"]),
+            _fmt_bps("30Y", v["y30"], v["y30_spike"]),
+            f"VIX {v['vix']:+.0f}%" if v["vix"] is not None else "VIX n/a",
+            f"equal-weight S&P {v['mkt']:+.1f}%" if v["mkt"] is not None else "equal-weight S&P n/a",
+            f"software {v['igv']:+.1f}%" if v["igv"] is not None else "software n/a",
+        ]
+        if missing:
+            parts.append(f"missing: {', '.join(missing)}")
         days.append(
             TallyDay(
                 date=str(pd.Timestamp(str(ts)).date()),
                 soxx_pct=round(float(move), 2),
                 driver=driver,
-                tnx_bps=None if bps is None else round(bps, 1),
-                vix_pct=None if vchg is None else round(vchg, 1),
-                igv_pct=None if ichg is None else round(ichg, 2),
-                detail=", ".join(parts),
+                provisional=provisional,
+                tnx_bps=None if v["y10"] is None else round(v["y10"], 1),
+                tnx_spike_bps=None if v["y10_spike"] is None else round(v["y10_spike"], 1),
+                y30_bps=None if v["y30"] is None else round(v["y30"], 1),
+                vix_pct=None if v["vix"] is None else round(v["vix"], 1),
+                market_pct=None if v["mkt"] is None else round(v["mkt"], 2),
+                igv_pct=None if v["igv"] is None else round(v["igv"], 2),
+                detail="; ".join(parts),
             )
         )
     days.reverse()  # newest first
-    counts = Counter(d.driver for d in days)
-    ordered = {
-        k: counts.get(k, 0)
-        for k in ("rates", "fear", "market", "chips", "unknown")
-        if counts.get(k, 0) or k != "unknown"
-    }
+    final = [d for d in days if not d.provisional]
+    counts = Counter(d.driver for d in final)
+    ordered = {k: counts[k] for k in TALLY_ORDER if counts.get(k)}
+    return Tally(
+        days=days,
+        counts=ordered,
+        window_sessions=int((soxx.index >= drops.index[0]).sum()) if len(drops) else 0,
+        summary=_tally_summary(days, final, counts),
+    )
+
+
+def _spike_bps(close: pd.Series | None, high: pd.Series | None) -> pd.Series:
+    """Intraday high minus the prior session's close, in bps."""
+    if close is None or high is None or len(close) < 2:
+        return pd.Series(dtype=float)
+    prior = close.astype(float).shift(1)
+    joined = pd.concat([high.astype(float), prior], axis=1, join="inner").dropna()
+    return (joined.iloc[:, 0] - joined.iloc[:, 1]) * 100.0
+
+
+def _fmt_bps(name: str, close: float | None, spike: float | None) -> str:
+    text = f"{name} {close:+.0f} bps" if close is not None else f"{name} n/a"
+    if spike is not None and spike >= 5 and (close is None or spike - close >= 5):
+        text += f" (+{spike:.0f} at its high)"
+    return text
+
+
+def _tally_summary(days: list[TallyDay], final: list[TallyDay], counts: Counter[str]) -> str:
     if not days:
-        summary = f"No semis drop of {abs(TALLY_DROP_PCT):.1f}% or more in the available history."
-    else:
-        since = day_label(days[-1].date)
-        bits = [f"{n} with {TALLY_LABELS[k]}" for k, n in ordered.items() if n]
-        summary = (
-            f"Of the last {len(days)} semis drops of {abs(TALLY_DROP_PCT):.1f}% or more (since {since}): "
-            f"{'; '.join(bits)}."
+        return f"No semis drop of {abs(TALLY_DROP_PCT):.1f}% or more in the available history."
+    n = len(final)
+    since = day_label(days[-1].date)
+    bits = [f"{TALLY_SHORT[k]} {counts[k]}" for k in TALLY_ORDER if counts.get(k)]
+    text = f"Last {n} semis drops of {abs(TALLY_DROP_PCT):.1f}% or more (since {since}): {', '.join(bits)}."
+    pending = [d for d in days if d.provisional]
+    if pending:
+        text += f" {day_label(pending[0].date)} is provisional until its official closes post, and isn't counted."
+    residual = counts.get("rotation", 0) + counts.get("chips", 0)
+    if n and residual * 2 > n:
+        text += (
+            f" On {residual} of {n}, none of the macro gauges moved and the drop was concentrated in chips. "
+            "That is all the gauges can say: they measure moves, not news, oil or policy headlines, so check "
+            "the day list before calling any single day a pure chip story."
         )
-        chips = counts.get("chips", 0)
-        if chips * 2 > len(days):
-            summary += (
-                " Most sell-offs had no macro trigger: the selling was about the chip trade itself "
-                "(positioning, valuation, company news). That is what the 'valuations questioned' "
-                "headlines are describing."
-            )
-        elif counts.get("rates", 0) * 2 > len(days):
-            summary += " Most sell-offs came with a yield jump: 'valuation' here mostly means the discount rate."
-    sessions = int((soxx.index >= drops.index[0]).sum()) if len(drops) else 0
-    return Tally(days=days, counts=dict(ordered), window_sessions=sessions, summary=summary)
+    elif n and counts.get("rates", 0) * 2 > n:
+        text += " Most came with a yield jump: here, 'valuation' mostly means the discount rate."
+    return text
 
 
 def overnight(verified: dict[str, Verified]) -> list[OvernightItem]:

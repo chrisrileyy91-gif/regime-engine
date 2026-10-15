@@ -212,10 +212,12 @@ def assess(verified: dict[str, Verified]) -> DataQuality:
         s = v.status
         if s.status in ("MISSING", "CONFLICT", "UNCONFIRMED"):
             what = "unavailable" if s.status == "MISSING" else "withheld"
-            severity = "warn"
+            severity = "warn" if s.used_in_call else "info"  # telemetry gaps never alarm
             issues.append(QualityIssue(severity=severity, message=f"{s.label} {what}: {'; '.join(s.notes)}"))
         elif s.stale:
-            issues.append(QualityIssue(severity="warn", message=f"{s.label}: {'; '.join(s.notes)}"))
+            issues.append(
+                QualityIssue(severity="warn" if s.used_in_call else "info", message=f"{s.label}: {'; '.join(s.notes)}")
+            )
         elif s.preliminary is not None:
             issues.append(
                 QualityIssue(

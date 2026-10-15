@@ -35,9 +35,20 @@ def chip_prices(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
     return out
 
 
-def market_series(results: dict[str, FetchResult]) -> pd.Series | None:
-    r = results.get(f"{MARKET_TICKER.lower()}@alpaca")
-    return r.series if r is not None and r.ok else None
+def tally_extras(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
+    """Tally-only series: the equal-weight S&P 500 and Cboe's intraday highs and 30Y."""
+    keys = {
+        "market": f"{MARKET_TICKER.lower()}@alpaca",
+        "y10_high": "y10_high@cboe",
+        "y30": "y30@cboe",
+        "y30_high": "y30_high@cboe",
+    }
+    out = {}
+    for name, key in keys.items():
+        r = results.get(key)
+        if r is not None and r.series is not None and not r.series.empty:
+            out[name] = r.series
+    return out
 
 
 def build_status(
@@ -82,7 +93,7 @@ def build_status(
         as_of=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         cycle=cycle,
         today=day,
-        tally=tally(verified, market_series(results)),
+        tally=tally(verified, tally_extras(results)),
         diagnosis=diagnose(features, drivers),
         backdrop=backdrop(features),
         drivers=drivers,

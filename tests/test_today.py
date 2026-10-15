@@ -8,7 +8,7 @@ import pytest
 from app.drivers import build_drivers
 from app.today import overnight, stress, tally
 from app.verify import verify_all
-from tests.conftest import TODAY, flat_then, market, series
+from tests.conftest import TODAY, market, series
 from tests.test_regime import calm
 
 
@@ -48,44 +48,93 @@ def test_unknown_inputs_are_named() -> None:
     assert stress(f, build_drivers(f, {})).level == "UNKNOWN"
 
 
-def _tally_market() -> tuple[dict, pd.Series]:
-    """300 sessions; four semis drops of -3%: with a yield jump, a VIX spike, the S&P down 2%, alone."""
-    n = 300
-    soxx, spy = [100.0] * n, [500.0] * n
-    y10 = list(flat_then(4.0, n))
-    vix = [15.0] * n
-    for i, kind in ((-40, "rates"), (-30, "fear"), (-20, "market"), (-10, "chips")):
+N = 300
+EVENTS = {  # index from the end -> what happens that day (each day semis fall 3%)
+    -80: "rates_close",  # 10Y closes +15 bps
+    -70: "rates_intraday",  # CPI-day pattern: 10Y +12 bps at the high, closes -3
+    -60: "rates_30y",  # 30Y closes +12 bps, 10Y flat
+    -50: "fear",  # VIX +27%
+    -40: "market",  # equal-weight S&P -2%
+    -30: "rotation",  # nothing macro, software +2%
+    -20: "chips",  # nothing macro, software -1%
+}
+
+
+def _tally_inputs(newest_drop: bool = False) -> tuple[dict, dict[str, pd.Series]]:
+    soxx, igv, rsp, vix = [100.0] * N, [50.0] * N, [150.0] * N, [15.0] * N
+    y10 = [4.0] * N
+    y30 = [4.5] * N
+    y10_hi = [4.01] * N
+    y30_hi = [4.51] * N
+    events = dict(EVENTS)
+    if newest_drop:
+        events[-1] = "chips"
+    for i, kind in events.items():
         soxx[i:] = [v * 0.97 for v in soxx[i:]]
-        if kind == "rates":
+        igv[i:] = [v * (1.02 if kind == "rotation" else 0.99) for v in igv[i:]]
+        if kind == "rates_close":
             y10[i:] = [v + 0.15 for v in y10[i:]]
+            y10_hi[i:] = [v + 0.15 for v in y10_hi[i:]]
+        if kind == "rates_intraday":
+            y10_hi[i] = y10[i - 1] + 0.12
+            y10[i:] = [v - 0.03 for v in y10[i:]]
+            y10_hi[i + 1 :] = [v - 0.03 for v in y10_hi[i + 1 :]]
+        if kind == "rates_30y":
+            y30[i:] = [v + 0.12 for v in y30[i:]]
+            y30_hi[i:] = [v + 0.12 for v in y30_hi[i:]]
         if kind == "fear":
             vix[i] = 19.0
         if kind == "market":
-            spy[i:] = [v * 0.98 for v in spy[i:]]
-    return market(soxx=series(soxx), y10=series(y10), vix=series(vix)), series(spy)
+            rsp[i:] = [v * 0.98 for v in rsp[i:]]
+    results = market(soxx=series(soxx), igv=series(igv), y10=series(y10), vix=series(vix))
+    extras = {"market": series(rsp), "y10_high": series(y10_hi), "y30": series(y30), "y30_high": series(y30_hi)}
+    return results, extras
 
 
 def test_tally_classifies_each_drop_by_what_moved_that_day() -> None:
-    results, spy = _tally_market()
-    t = tally(verify_all(results, TODAY.date()), spy)
-    assert [d.driver for d in t.days] == ["chips", "market", "fear", "rates"]  # newest first
-    assert t.counts == {"rates": 1, "fear": 1, "market": 1, "chips": 1}
-    assert "Of the last 4 semis drops of 1.5% or more" in t.summary
+    results, extras = _tally_inputs()
+    t = tally(verify_all(results, TODAY.date()), extras)
+    assert [d.driver for d in t.days] == ["chips", "rotation", "market", "fear", "rates", "rates", "rates"]
+    assert t.counts == {"rates": 3, "fear": 1, "market": 1, "rotation": 1, "chips": 1}
+
+
+def test_intraday_yield_spike_that_reversed_counts_as_rates() -> None:
+    """CPI day, Oct 14: the 10Y rose 11 bps intraday and closed down 3. Close-to-close misses it."""
+    results, extras = _tally_inputs()
+    day = next(
+        d for d in tally(verify_all(results, TODAY.date()), extras).days if d.tnx_bps is not None and d.tnx_bps < 0
+    )
+    assert day.driver == "rates" and day.tnx_spike_bps == pytest.approx(12.0, abs=0.5)
+    assert "at its high" in day.detail
+
+
+def test_without_intraday_highs_a_close_only_day_cannot_be_called_chip_specific() -> None:
+    results, extras = _tally_inputs()
+    del extras["y10_high"]
+    drivers = [d.driver for d in tally(verify_all(results, TODAY.date()), extras).days]
+    assert "chips" not in drivers and "rotation" not in drivers and "unknown" in drivers
+
+
+def test_newest_day_is_provisional_and_not_counted() -> None:
+    results, extras = _tally_inputs(newest_drop=True)
+    extras["y30"] = extras["y30"].iloc[:-1]  # the 30Y close hasn't posted yet
+    extras["y30_high"] = extras["y30_high"].iloc[:-1]
+    t = tally(verify_all(results, TODAY.date()), extras)
+    assert t.days[0].provisional and t.days[0].driver == "unknown"
+    assert sum(t.counts.values()) == len(t.days) - 1 and "provisional" in t.summary
+
+
+def test_summary_never_claims_there_was_no_macro_news() -> None:
+    results, extras = _tally_inputs()
+    text = tally(verify_all(results, TODAY.date()), extras).summary
+    assert "no macro trigger" not in text.lower()
 
 
 def test_without_the_market_series_nothing_is_called_chip_specific() -> None:
-    """Chip-specific is a residual: it can't be claimed if the S&P 500 wasn't checked."""
-    results, _ = _tally_market()
-    drivers = {d.driver for d in tally(verify_all(results, TODAY.date())).days}
-    assert "chips" not in drivers and "unknown" in drivers
-
-
-def test_tally_without_rates_data_says_unknown() -> None:
-    results, spy = _tally_market()
-    for key in [k for k in results if k.startswith("y10@")]:
-        results[key] = results[key].__class__(key, "TNX", key.split("@")[1], None, "down")
-    days = tally(verify_all(results, TODAY.date()), spy).days
-    assert {d.driver for d in days} <= {"fear", "market", "unknown"} and "chips" not in {d.driver for d in days}
+    results, extras = _tally_inputs()
+    del extras["market"]
+    drivers = {d.driver for d in tally(verify_all(results, TODAY.date()), extras).days}
+    assert not drivers & {"chips", "rotation", "market"}
 
 
 def test_overnight_line() -> None:

@@ -87,6 +87,37 @@ class FillReport:
     model: str | None = None
 
 
+FillCache = dict[str, dict[str, dict[str, Any]]]  # {input: {date: {value, source_url, source_name}}}
+FILL_CACHE_DAYS = 30
+
+
+def _from_cache(gap: Gap, cache: FillCache) -> Fill | None:
+    """A value an earlier run found for this exact date, re-checked against today's checks."""
+    hit = cache.get(gap.key, {}).get(gap.date)
+    if not hit or not isinstance(hit.get("value"), (int, float)):
+        return None
+    value = float(hit["value"])
+    if not _agrees(gap.expected, value, gap.tolerance, gap.kind):
+        return None
+    if any(not _agrees(v, value, tol, kind) for _, v, tol, kind in gap.vetoes):
+        return None
+    return Fill(gap.key, gap.date, value, str(hit.get("source_url", "")), str(hit.get("source_name", "")))
+
+
+def _remember(cache: FillCache, fills: dict[str, Fill], now_ny: datetime) -> None:
+    for fill in fills.values():
+        cache.setdefault(fill.key, {})[fill.date] = {
+            "value": fill.value,
+            "source_url": fill.source_url,
+            "source_name": fill.source_name,
+        }
+    cutoff = (now_ny - pd.Timedelta(days=FILL_CACHE_DAYS)).date().isoformat()
+    for key in list(cache):
+        cache[key] = {d: v for d, v in cache[key].items() if d >= cutoff}
+        if not cache[key]:
+            del cache[key]
+
+
 def session_done(market: str, day: str, now_ny: datetime) -> bool:
     today = now_ny.date().isoformat()
     if day < today:
@@ -255,6 +286,7 @@ async def fill_gaps(
     usage: UsageState,
     now_ny: datetime | None = None,
     client: httpx.AsyncClient | None = None,
+    cache: FillCache | None = None,
 ) -> FillReport:
     now_ny = now_ny or datetime.now(NY)
     report = FillReport()
@@ -262,6 +294,16 @@ async def fill_gaps(
     if not gaps:
         return report
     report.gaps = {g.key: g for g in gaps}
+    if cache is not None:
+        for gap in list(gaps):
+            cached = _from_cache(gap, cache)
+            if cached is not None:
+                report.fills[gap.key] = cached
+                report.notes.append(f"{INPUTS[gap.key].label}: reused the value an earlier run found for {gap.date}")
+                gaps.remove(gap)
+        if not gaps:
+            _remember(cache, report.fills, now_ny)
+            return report
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         report.notes.append(f"Claude gap filler not configured; {len(gaps)} gap(s) left open")
@@ -327,6 +369,8 @@ async def fill_gaps(
             )
             continue
         report.fills[gap.key] = Fill(gap.key, gap.date, value, url, str(answer.get("source_name") or _host(url)))
+    if cache is not None:
+        _remember(cache, report.fills, now_ny)
     return report
 
 

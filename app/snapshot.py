@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.claude_fill import FillReport, UsageState, fill_gaps
+from app.claude_fill import FillCache, FillReport, UsageState, fill_gaps
 from app.data import FetchResult, KrxCache, fetch_all, redact
 from app.fundamentals import SecCache, fetch_filings
 from app.models import DataQuality, QualityIssue, RegimeStatus
@@ -30,6 +30,7 @@ HISTORY_LIMIT = 750  # ~18 months at two runs per weekday
 CRITICAL_INPUTS = ("tnx_pct", "vix", "soxx_rsi")
 KRX_CACHE_FILE = "krx_cache.json"
 SEC_CACHE_FILE = "sec_cache.json"
+FILL_CACHE_FILE = "claude_fills.json"
 CLAUDE_USAGE_FILE = "claude_usage.json"
 PAGE_SOURCE = Path(__file__).resolve().parent.parent / "web" / "index.html"
 
@@ -115,11 +116,23 @@ def save_usage(state: Path, usage: UsageState) -> None:
     (state / CLAUDE_USAGE_FILE).write_text(json.dumps(usage, indent=1, sort_keys=True), encoding="utf-8")
 
 
-async def _fill(results: dict[str, FetchResult] | None, usage: UsageState) -> FillReport | None:
+async def _fill(
+    results: dict[str, FetchResult] | None, usage: UsageState, cache: FillCache | None = None
+) -> FillReport | None:
     if results is None:
         return None
     verified = verify_all(results, datetime.now(timezone.utc).date())
-    return await fill_gaps(verified, results, usage)
+    return await fill_gaps(verified, results, usage, cache=cache)
+
+
+def load_fill_cache(state: Path) -> FillCache:
+    data = _read_json(state / FILL_CACHE_FILE)
+    return data if isinstance(data, dict) else {}
+
+
+def save_fill_cache(state: Path, cache: FillCache) -> None:
+    state.mkdir(parents=True, exist_ok=True)
+    (state / FILL_CACHE_FILE).write_text(json.dumps(cache, indent=1, sort_keys=True), encoding="utf-8")
 
 
 def load_sec_cache(state: Path) -> SecCache:
@@ -169,8 +182,10 @@ def main(argv: list[str] | None = None) -> int:
     results, error = asyncio.run(_fetch(krx_cache))
     save_krx_cache(args.state, krx_cache)
     usage = load_usage(args.state)
-    fills = asyncio.run(_fill(results, usage))
+    fill_cache = load_fill_cache(args.state)
+    fills = asyncio.run(_fill(results, usage, fill_cache))
     save_usage(args.state, usage)
+    save_fill_cache(args.state, fill_cache)
     status = resolve_status(results, error, args.state, fills, sec_cache)
     history = write_outputs(status, args.state, args.site)
 

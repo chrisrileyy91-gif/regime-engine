@@ -22,6 +22,10 @@ class Thresholds:
     vix_jump_pct: float = 10.0  # tally: VIX up this much on a semis down day = market-wide fear
     market_drop_pct: float = -1.0  # tally: equal-weight S&P 500 down this much the same day = broad selling
     oil_z: float = 2.0  # tally: USO move this unusual (either way) vs its prior 60 sessions = oil shock
+    oil_move_pct: float = 4.0  # ...or this big regardless: in a war regime a 60-day z adapts the shocks
+    # away (Sep 1, US strikes on Iran: USO +5.5% was only 1.65 sigma)
+    y2_jump_bps: float = 10.0  # tally: 2Y up this much = policy repricing (Aug 28: hike odds to 60%,
+    # 2Y +14 bps while the 10Y/30Y barely moved)
     dollar_z: float = 2.0  # tally: UUP up this unusually = dollar squeeze
     tally_z_window: int = 60
 

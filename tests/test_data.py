@@ -339,7 +339,7 @@ async def test_treasury_failure_reports_both_keys() -> None:
     respx.get(url__startswith="https://home.treasury.gov/").mock(return_value=httpx.Response(404))
     async with httpx.AsyncClient() as client:
         results = await data.fetch_treasury(client)
-    assert sorted(r.key for r in results) == ["t3m@treasury", "y10@treasury"]
+    assert sorted(r.key for r in results) == ["t3m@treasury", "y10@treasury", "y2@treasury"]
     assert not any(r.ok for r in results)
 
 
@@ -368,3 +368,14 @@ def test_cboe_history_highs() -> None:
     }
     highs = parse_cboe_highs(payload, 10.0)
     assert highs.iloc[-1] == pytest.approx(5.329)
+
+
+def test_treasury_csv_reads_the_two_year() -> None:
+    text = 'Date,"3 Mo","2 Yr","10 Yr"\n08/28/2026,4.20,4.34,4.80\n08/27/2026,4.20,4.20,4.78\n'
+    parsed = data.parse_treasury_csv([text])
+    assert parsed["y2@treasury"].diff().iloc[-1] * 100 == pytest.approx(14.0)
+
+
+def test_treasury_csv_without_two_year_still_reads_ten_year() -> None:
+    parsed = data.parse_treasury_csv(['Date,"3 Mo","10 Yr"\n08/28/2026,4.20,4.80\n'])
+    assert "y10@treasury" in parsed and "y2@treasury" not in parsed

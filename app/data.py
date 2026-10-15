@@ -249,7 +249,9 @@ def parse_treasury_csv(texts: list[str]) -> dict[str, pd.Series]:
             raise DataError(f"Treasury CSV missing column {column!r}")
     index = pd.to_datetime(frame["Date"], format="%m/%d/%Y")
     out = {}
-    for key, column in (("y10@treasury", "10 Yr"), ("t3m@treasury", "3 Mo")):
+    for key, column in (("y10@treasury", "10 Yr"), ("t3m@treasury", "3 Mo"), ("y2@treasury", "2 Yr")):
+        if column not in frame.columns:  # the 2Y is tally-only; its absence must not break the 10Y/3M
+            continue
         values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
         out[key] = _clean(pd.Series(values, index=index))
     return out
@@ -370,7 +372,7 @@ async def fetch_treasury(client: httpx.AsyncClient) -> list[FetchResult]:
     except Exception as exc:
         return [
             FetchResult(k, k.split("@")[0].upper(), "treasury", None, _error(exc))
-            for k in ("y10@treasury", "t3m@treasury")
+            for k in ("y10@treasury", "t3m@treasury", "y2@treasury")
         ]
 
 

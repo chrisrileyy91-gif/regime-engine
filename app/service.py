@@ -39,7 +39,7 @@ def chip_prices(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
 def tally_extras(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
     """Tally-only series: the equal-weight S&P 500 and Cboe's intraday highs and 30Y."""
     keys = {name: f"{ticker.lower()}@alpaca" for name, ticker in TALLY_TICKERS.items()}
-    keys.update({"y10_high": "y10_high@cboe", "y30": "y30@cboe", "y30_high": "y30_high@cboe"})
+    keys.update({"y10_high": "y10_high@cboe", "y30": "y30@cboe", "y30_high": "y30_high@cboe", "y2": "y2@treasury"})
     out = {}
     for name, key in keys.items():
         r = results.get(key)

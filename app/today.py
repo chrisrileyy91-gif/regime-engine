@@ -24,8 +24,8 @@ from app.verify import Verified
 
 STRESS_LABELS = {"CALM": "Calm", "ELEVATED": "Elevated", "STRESSED": "Stressed", "UNKNOWN": "Unknown"}
 TALLY_LABELS = {
-    "rates": "yields jumped (10Y or 30Y, at the close or intraday)",
-    "oil": "oil moved sharply (USO, 2 sigma either way)",
+    "rates": "yields jumped (2Y, 10Y or 30Y; close or intraday)",
+    "oil": "oil moved sharply (USO 4%+ or 2 sigma, either way)",
     "dollar": "the dollar jumped (UUP, 2 sigma)",
     "fear": "VIX spiked",
     "market": "the broad market fell (equal-weight S&P 500 down 1%+)",
@@ -138,6 +138,7 @@ def tally(
         "y10_spike": _spike_bps(y10_close, extras.get("y10_high")),
         "y30": _bps_changes(extras.get("y30")),
         "y30_spike": _spike_bps(extras.get("y30"), extras.get("y30_high")),
+        "y2": _bps_changes(extras.get("y2")),
         "vix": _pct_changes(verified["vix"].series if "vix" in verified else None),
         "igv": _pct_changes(verified["igv"].series if "igv" in verified else None),
         "mkt": _pct_changes(extras.get("market")),
@@ -150,19 +151,28 @@ def tally(
 
     drops = soxx[soxx <= TALLY_DROP_PCT].iloc[-TALLY_DAYS:]
     newest = soxx.index[-1]
+    y2_series = extras.get("y2")
+    y2_last = y2_series.index[-1] if y2_series is not None and not y2_series.empty else None
     days = []
     for ts, move in drops.items():
         v = {k: _at(m, ts) for k, m in maps.items()}
+        # Treasury publishes no curve on bond-market holidays (Columbus Day, Veterans Day) while
+        # stocks trade. A date before Treasury's latest row with no row of its own had no 2Y move.
+        y2_closed = v["y2"] is None and y2_last is not None and ts < y2_last
         rates = _any_true(
             None if v["y10"] is None else v["y10"] >= t.tnx_1d_spike_bps,
             None if v["z"] is None else v["z"] >= t.tnx_delta_z,
             None if v["y10_spike"] is None else v["y10_spike"] >= t.tnx_1d_spike_bps,
             None if v["y30"] is None else v["y30"] >= t.tnx_1d_spike_bps,
             None if v["y30_spike"] is None else v["y30_spike"] >= t.tnx_1d_spike_bps,
+            False if y2_closed else (None if v["y2"] is None else v["y2"] >= t.y2_jump_bps),
         )
         gauges = {
             "rates": rates,
-            "oil": None if v["oil_z"] is None else abs(v["oil_z"]) >= t.oil_z,
+            "oil": _any_true(
+                None if v["oil_z"] is None else abs(v["oil_z"]) >= t.oil_z,
+                None if v["oil"] is None else abs(v["oil"]) >= t.oil_move_pct,
+            ),
             "dollar": None if v["usd_z"] is None else v["usd_z"] >= t.dollar_z,
             "fear": None if v["vix"] is None else v["vix"] >= t.vix_jump_pct,
             "market": None if v["mkt"] is None else v["mkt"] <= t.market_drop_pct,
@@ -184,15 +194,17 @@ def tally(
                 ("10Y intraday high", "y10_spike"),
                 ("30Y", "y30"),
                 ("30Y intraday high", "y30_spike"),
+                ("2Y", "y2"),
                 ("oil", "oil_z"),
                 ("dollar", "usd_z"),
                 ("VIX close", "vix"),
                 ("equal-weight S&P", "mkt"),
                 ("software", "igv"),
             )
-            if v[key] is None
+            if v[key] is None and not (key == "y2" and y2_closed)
         ]
         parts = [
+            "2Y closed" if y2_closed else (f"2Y {v['y2']:+.0f} bps" if v["y2"] is not None else "2Y n/a"),
             _fmt_bps("10Y", v["y10"], v["y10_spike"]),
             _fmt_bps("30Y", v["y30"], v["y30_spike"]),
             f"oil {v['oil']:+.1f}%" if v["oil"] is not None else "oil n/a",
@@ -216,6 +228,7 @@ def tally(
                 tnx_bps=_r(v["y10"], 1),
                 tnx_spike_bps=_r(v["y10_spike"], 1),
                 y30_bps=_r(v["y30"], 1),
+                y2_bps=_r(v["y2"], 1),
                 oil_pct=_r(v["oil"], 2),
                 dollar_pct=_r(v["usd"], 2),
                 vix_pct=_r(v["vix"], 1),

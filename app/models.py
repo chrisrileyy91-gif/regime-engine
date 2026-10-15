@@ -172,6 +172,7 @@ class TallyDay(BaseModel):
     tnx_bps: float | None = None
     tnx_spike_bps: float | None = None  # 10Y intraday high vs the prior close
     y30_bps: float | None = None
+    y2_bps: float | None = None  # Treasury 2Y, the policy-expectations gauge
     vix_pct: float | None = None
     market_pct: float | None = None  # equal-weight S&P 500
     oil_pct: float | None = None  # USO

@@ -53,7 +53,9 @@ N = 300
 EVENTS = {  # index from the end -> what happens that day (each day semis fall 3%)
     -80: "rates_close",  # 10Y closes +15 bps
     -70: "rates_intraday",  # CPI-day pattern: 10Y +12 bps at the high, closes -3
+    -62: "rates_2y",  # Aug 28 pattern: 2Y +14 bps on hike odds, 10Y/30Y flat
     -60: "rates_30y",  # 30Y closes +12 bps, 10Y flat
+    -57: "oil_big",  # Sep 1 pattern: USO +5% in a volatile tape (well under 2 sigma)
     -55: "oil",  # USO +8% on a quiet tape
     -52: "dollar",  # UUP +1.5%
     -50: "fear",  # VIX +27%
@@ -67,11 +69,14 @@ def _tally_inputs(newest_drop: bool = False) -> tuple[dict, dict[str, pd.Series]
     soxx, igv, rsp, vix = [100.0] * N, [50.0] * N, [150.0] * N, [15.0] * N
     rng = np.random.default_rng(3)
     uso = list(80.0 * np.cumprod(1 + rng.normal(0, 0.01, N)))  # ~1% daily moves
+    # War-regime oil over the last 90 sessions: +-3.9% every day (sigma ~3.9%), so +5% is ~1.3 sigma.
+    uso[-90:] = list(uso[-91] * np.cumprod([1.039 if k % 2 else 1 / 1.039 for k in range(90)]))
     uup = list(28.0 * np.cumprod(1 + rng.normal(0, 0.002, N)))  # ~0.2% daily moves
     y10 = [4.0] * N
     y30 = [4.5] * N
     y10_hi = [4.01] * N
     y30_hi = [4.51] * N
+    y2 = [4.2] * N
     events = dict(EVENTS)
     if newest_drop:
         events[-1] = "chips"
@@ -92,6 +97,11 @@ def _tally_inputs(newest_drop: bool = False) -> tuple[dict, dict[str, pd.Series]
             vix[i] = 19.0
         if kind == "oil":
             uso[i:] = [v * 1.08 for v in uso[i:]]
+        if kind == "oil_big":
+            ratio = uso[i - 1] * 1.05 / uso[i]
+            uso[i:] = [v * ratio for v in uso[i:]]
+        if kind == "rates_2y":
+            y2[i:] = [v + 0.14 for v in y2[i:]]
         if kind == "dollar":
             uup[i:] = [v * 1.015 for v in uup[i:]]
         if kind == "market":
@@ -104,6 +114,7 @@ def _tally_inputs(newest_drop: bool = False) -> tuple[dict, dict[str, pd.Series]
         "y30_high": series(y30_hi),
         "oil": series(uso),
         "dollar": series(uup),
+        "y2": series(y2),
     }
     return results, extras
 
@@ -118,18 +129,20 @@ def test_tally_classifies_each_drop_by_what_moved_that_day() -> None:
         "fear",
         "dollar",
         "oil",
+        "oil",
+        "rates",
         "rates",
         "rates",
         "rates",
     ]
-    assert t.counts == {"rates": 3, "oil": 1, "dollar": 1, "fear": 1, "market": 1, "rotation": 1, "chips": 1}
+    assert t.counts == {"rates": 4, "oil": 2, "dollar": 1, "fear": 1, "market": 1, "rotation": 1, "chips": 1}
 
 
 def test_missing_oil_means_nothing_below_it_can_claim_the_day() -> None:
     results, extras = _tally_inputs()
     del extras["oil"]
     drivers = [d.driver for d in tally(verify_all(results, TODAY.date()), extras).days]
-    assert drivers.count("rates") == 3 and set(drivers) == {"rates", "unknown"}
+    assert drivers.count("rates") == 4 and set(drivers) == {"rates", "unknown"}
 
 
 def test_headlines_annotate_and_flag_disagreement_without_changing_the_gauge() -> None:

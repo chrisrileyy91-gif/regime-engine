@@ -26,7 +26,7 @@ records a day later.
 | KOSPI, Samsung | EODHD end-of-day (2–3h after close) → KRX Open API (next day) | Yahoo ±0.1% | — |
 | Company filings | SEC EDGAR XBRL companyconcept (each company's own 10-Q/10-K) | — | entity-name check per CIK |
 | Chip stock prices | Alpaca SIP quarter-end closes (earnings-vs-price catalyst only) | — | — |
-| Tally-only | Cboe TNX/TYX daily high and TYX close; Alpaca SIP RSP, USO (oil), UUP (dollar) | — | — |
+| Tally-only | Cboe TNX/TYX daily high and TYX close; Treasury 2Y; Alpaca SIP RSP, USO (oil), UUP (dollar) | — | — |
 | Headlines | Benzinga via Alpaca news API (same keys), labelled by Claude from the list only | cited ids must exist | — |
 
 Statuses: **VERIFIED** (a confirming source has the same date and agrees) · **OFFICIAL**
@@ -124,8 +124,10 @@ software group it alone faked an acceleration on the first real read.
 - Drivers (same session only): 10Y +10 bps or z > 1.5 · VIX > 20 · SOXX RSI < 40.
 - Stress: 0 active = Calm, 1 = Elevated, 2+ or VIX > 30 = Stressed, all unknown = Unknown.
 - Tally: the last 20 sessions with SOXX ≤ −1.5%, each tagged in order:
-  1. **rates** — 10Y or 30Y up ≥ 10 bps at the close OR at the intraday high vs the prior close, or a
-     10Y close z ≥ 1.5. Intraday is required: CPI day Oct 14 the 10Y rose 11.2 bps by its high and
+  1. **rates** — 10Y or 30Y up ≥ 10 bps at the close OR at the intraday high vs the prior close, a
+     10Y close z ≥ 1.5, or the Treasury 2Y up ≥ 10 bps (policy repricing: Aug 28 hike odds jumped to
+     60%, 2Y +14 bps, 10Y +5). A date before Treasury's latest row with no row is a bond holiday
+     (Columbus Day): "2Y closed", not missing. Intraday is required: CPI day Oct 14 the 10Y rose 11.2 bps by its high and
      closed −2.7; a close-to-close test misses it entirely.
   2. **fear** — VIX close ≥ +10%.  3. **market** — equal-weight S&P 500 (RSP) ≤ −1%. Not SPY: chips
      are a big slice of SPY, so a semis rout drags it (Oct 14 SPY −1.1%; Sep 14 SPY −0.5%, RSP +0.1%).
@@ -134,7 +136,9 @@ software group it alone faked an acceleration on the first real read.
   `provisional` (not counted) while any of its official closes are missing; 06:00 finalizes it.
   The page must never say "no macro trigger": gauges see moves, not news, policy or levels
   (Aug 18 "yields rattle markets" was the 30Y LEVEL at a 2007 high; its move was +1.7 bps).
-- Oil (USO, |z| ≥ 2 vs prior 60 sessions) and dollar (UUP, z ≥ +2) gauges sit after rates. USO
+- Oil (USO |move| ≥ 4% OR |z| ≥ 2 vs prior 60 sessions) and dollar (UUP, z ≥ +2) sit after rates.
+  The 4% floor exists because a 60-day z adapts shocks away in a war regime (Sep 1, US strikes on
+  Iran: USO +5.5% = 1.65σ). Both fixes came from headline flags, which is what the flags are for. USO
   and UUP are what Crude Logic (frack-around) already uses after Yahoo's CL=F broke; EIA's official
   WTI spot posts in weekly batches, too late for same day. `moved` lists every gauge that moved.
 - Headlines (`app/news.py`): for each tally day, Alpaca/Benzinga headlines tagged to NVDA, AVGO,

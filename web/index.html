@@ -321,7 +321,7 @@
 
     <section>
       <h2>Is it a scapegoat?</h2>
-      <p class="lede">What moved on each recent semis sell-off. Gauges first, in order: yields (10Y and 30Y, close or intraday), oil, the dollar, VIX, the equal-weight S&amp;P 500. Then the day's headlines (Benzinga, read by Claude, each label linked to its articles). When the two disagree, the day is flagged.</p>
+      <p class="lede">What moved on each recent semis sell-off. Gauges first, in order: yields (2Y, 10Y and 30Y; close or intraday), oil, the dollar, VIX, the equal-weight S&amp;P 500. Then the day's headlines (Benzinga, read by Claude, each label linked to its articles). When the two disagree, the day is flagged.</p>
       <div class="tally-bar" id="tally-bar"></div>
       <div class="tally-legend" id="tally-legend"></div>
       <p class="tally-summary" id="tally-summary"></p>
@@ -379,8 +379,8 @@
     UNKNOWN: "Today's drivers couldn't be checked.",
   };
   const TALLY = {
-    rates: ["t-rates", "Yields jumped (close or intraday)"],
-    oil: ["t-oil", "Oil shock (USO, 2σ)"],
+    rates: ["t-rates", "Yields jumped (2Y, 10Y or 30Y)"],
+    oil: ["t-oil", "Oil shock (USO 4%+ or 2σ)"],
     dollar: ["t-dollar", "Dollar jumped (UUP, 2σ)"],
     fear: ["t-fear", "VIX spiked"],
     market: ["t-market", "Broad market fell (equal-weight S&P −1%+)"],

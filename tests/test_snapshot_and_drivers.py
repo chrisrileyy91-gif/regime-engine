@@ -71,6 +71,22 @@ def test_diagnosis_dates_the_move_and_names_same_session_drivers() -> None:
     assert "liquidity" not in text
 
 
+def test_weak_momentum_on_an_up_day_is_a_bounce_not_a_breakdown() -> None:
+    """Oct 21 live read: SOXX +2.1% with RSI 39 was listed as a same-session 'breakdown'."""
+    f = features(soxx_rsi=39.0, soxx_chg_1d_pct=2.1, igv_chg_1d_pct=1.8)
+    text = diagnose(f, build_drivers(f, {}))
+    assert text.startswith("Semis rose 2.1% on Tue Oct 13; software rose 1.8%.")
+    assert "Chip momentum is still weak (SOXX RSI 39, below 40); today's gain was a bounce against it" in text
+    assert "Same-session drivers" not in text and "company or sector news" not in text
+
+
+def test_bounce_keeps_other_same_session_drivers() -> None:
+    f = features(vix=24.5, soxx_rsi=35.0, soxx_chg_1d_pct=1.5)
+    text = diagnose(f, build_drivers(f, {}))
+    assert "Same-session drivers: algorithmic risk-off (VIX 24.5)." in text
+    assert "semi momentum breakdown" not in text and "bounce against it" in text
+
+
 def test_first_live_read_no_longer_blames_the_level() -> None:
     f = features(tnx_pct=5.22, tnx_pctile=95.0, tnx_chg_1d_bps=-2.3, tnx_delta_z=-0.8, soxx_chg_1d_pct=-2.6)
     text = diagnose(f, build_drivers(f, {}))

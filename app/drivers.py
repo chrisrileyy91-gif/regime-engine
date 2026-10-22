@@ -143,7 +143,7 @@ def _evidence(driver: Driver) -> str:
     return ""
 
 
-def diagnose(f: MarketFeatures, drivers: list[Driver]) -> str:
+def diagnose(f: MarketFeatures, drivers: list[Driver], t: Thresholds = THRESHOLDS) -> str:
     stock_day = f.dates.get("soxx")
     sentences = []
     if f.soxx_chg_1d_pct is not None:
@@ -154,10 +154,25 @@ def diagnose(f: MarketFeatures, drivers: list[Driver]) -> str:
 
     active = [d for d in drivers if d.state == "ACTIVE"]
     unknown = [d for d in drivers if d.state == "UNKNOWN"]
+
+    # RSI below the line is a 14-session reading, not something that moved today. On an up day it
+    # can't explain the move (Oct 21: SOXX +2.1% with RSI 39 was listed as a "breakdown"), so say
+    # momentum is still weak and today's gain pushed against it, instead of calling it a driver.
+    weak_momentum = None
+    if f.soxx_chg_1d_pct is not None and f.soxx_chg_1d_pct >= 0.1:
+        weak_momentum = next((d for d in active if d.key == "semis"), None)
+        active = [d for d in active if d is not weak_momentum]
+    if weak_momentum is not None:
+        ev = _evidence(weak_momentum)
+        reading = f" ({ev}, below {t.semi_rsi_digestion:.0f})" if ev else ""
+        sentences.append(
+            f"Chip momentum is still weak{reading}; today's gain was a bounce against it, not a breakdown."
+        )
+
     if active:
         reasons = "; ".join(f"{d.name.lower()} ({ev})" if (ev := _evidence(d)) else d.name.lower() for d in active)
         sentences.append(f"Same-session drivers: {reasons}.")
-    elif not unknown:
+    elif not unknown and weak_momentum is None:
         sentences.append(
             "None of the three drivers fired, so the move isn't explained by yields, volatility or chip "
             "momentum. Look at company or sector news."

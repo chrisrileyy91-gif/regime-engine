@@ -379,3 +379,68 @@ def test_treasury_csv_reads_the_two_year() -> None:
 def test_treasury_csv_without_two_year_still_reads_ten_year() -> None:
     parsed = data.parse_treasury_csv(['Date,"3 Mo","10 Yr"\n08/28/2026,4.20,4.80\n'])
     assert "y10@treasury" in parsed and "y2@treasury" not in parsed
+
+
+SPLITS_PAGE = {
+    "corporate_actions": {
+        "forward_splits": [
+            {"symbol": "SOXX", "new_rate": 3, "old_rate": 1, "ex_date": "2026-11-05", "process_date": "2026-11-05"}
+        ],
+        "reverse_splits": [{"symbol": "IGV", "new_rate": 1, "old_rate": 10, "ex_date": "2026-10-20"}],
+    },
+    "next_page_token": None,
+}
+BARS_PAGE = {
+    "bars": {"SOXX": [{"t": "2026-11-04T05:00:00Z", "c": 150.1}], "IGV": [{"t": "2026-11-04T05:00:00Z", "c": 98.2}]},
+    "next_page_token": None,
+}
+
+
+def test_parse_alpaca_splits_forward_and_reverse() -> None:
+    splits = data.parse_alpaca_splits([SPLITS_PAGE])
+    assert splits["SOXX"][0].factor == 3.0 and str(splits["SOXX"][0].ex_date.date()) == "2026-11-05"
+    assert splits["IGV"][0].factor == pytest.approx(0.1)
+
+
+def test_parse_alpaca_splits_rejects_incomplete_rows() -> None:
+    with pytest.raises(DataError):
+        data.parse_alpaca_splits([{"corporate_actions": {"forward_splits": [{"symbol": "SOXX", "new_rate": 3}]}}])
+    with pytest.raises(DataError):
+        data.parse_alpaca_splits([{"message": "forbidden"}])
+
+
+@respx.mock
+async def test_alpaca_attaches_splits_falling_back_to_v1beta1(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APCA_API_KEY_ID", "k")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "s")
+    monkeypatch.setattr(data, "CYCLE_PRICE_TICKERS", ())
+    monkeypatch.setattr(data, "TALLY_TICKERS", {})
+    respx.get(url__startswith="https://data.alpaca.markets/v2/stocks/bars").mock(
+        return_value=httpx.Response(200, json=BARS_PAGE)
+    )
+    respx.get(url__startswith="https://data.alpaca.markets/v1/corporate-actions").mock(return_value=httpx.Response(404))
+    respx.get(url__startswith="https://data.alpaca.markets/v1beta1/corporate-actions").mock(
+        return_value=httpx.Response(200, json=SPLITS_PAGE)
+    )
+    async with httpx.AsyncClient() as client:
+        results = {r.key: r for r in await data.fetch_alpaca(client)}
+    soxx = results["soxx@alpaca"]
+    assert soxx.ok and soxx.splits_error is None and [s.factor for s in soxx.splits] == [3.0]
+
+
+@respx.mock
+async def test_alpaca_split_lookup_failure_keeps_the_bars(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APCA_API_KEY_ID", "k")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "s")
+    monkeypatch.setattr(data, "CYCLE_PRICE_TICKERS", ())
+    monkeypatch.setattr(data, "TALLY_TICKERS", {})
+    respx.get(url__startswith="https://data.alpaca.markets/v2/stocks/bars").mock(
+        return_value=httpx.Response(200, json=BARS_PAGE)
+    )
+    respx.get(url__regex=r"https://data\.alpaca\.markets/v1(beta1)?/corporate-actions").mock(
+        return_value=httpx.Response(403)
+    )
+    async with httpx.AsyncClient() as client:
+        results = {r.key: r for r in await data.fetch_alpaca(client)}
+    soxx = results["soxx@alpaca"]
+    assert soxx.ok and soxx.splits == [] and "403" in (soxx.splits_error or "")

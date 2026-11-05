@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 import pytest
 
 from app.config import INPUTS
-from app.verify import assess, verify_all, verify_input
+from app.data import Split
+from app.verify import Verified, assess, verify_all, verify_input
 from tests.conftest import TODAY, failed, flat_then, market, ok, series
 
 TODAY_DATE = TODAY.date()
@@ -157,3 +160,85 @@ def test_telemetry_gaps_are_info_not_warnings() -> None:
     quality = assess(verify_all(results, TODAY.date()))
     assert quality.status == "OK"
     assert not [i for i in quality.issues if i.severity == "warn"]
+
+
+# --- Splits (Nov 5, 2026: SOXX 3-for-1, effective after the Nov 4 close) ---------------------
+# The 06:00 run withheld SOXX: Alpaca's split-adjusted closes were exactly 1/3 of Yahoo's,
+# which hadn't re-based yet. These are the numbers from that run's warning.
+SPLIT_DAYS = pd.to_datetime(["2026-10-29", "2026-10-30", "2026-11-02", "2026-11-03", "2026-11-04"])
+ALPACA_ADJUSTED = [171.3, 157.2, 151.2, 155.0, 150.1]
+YAHOO_RAW = [513.9, 471.5, 453.6, 465.0, 450.4]
+SPLIT_DAY = date(2026, 11, 5)
+SOXX_SPLIT = Split("SOXX", pd.Timestamp("2026-11-05"), 3.0)
+
+
+def split_market(
+    record: list[float],
+    yahoo: list[float],
+    days: pd.DatetimeIndex = SPLIT_DAYS,
+    splits: list[Split] | None = None,
+    splits_error: str | None = None,
+) -> dict:  # type: ignore[type-arg]
+    results = market()
+    alpaca = ok("soxx@alpaca", pd.Series(record, index=days))
+    alpaca.splits = [SOXX_SPLIT] if splits is None else splits
+    alpaca.splits_error = splits_error
+    results["soxx@alpaca"] = alpaca
+    results["soxx@yahoo"] = ok("soxx@yahoo", pd.Series(yahoo, index=days))
+    return results
+
+
+def split_check(results: dict) -> Verified:  # type: ignore[type-arg]
+    return verify_input("soxx", INPUTS["soxx"], results, SPLIT_DAY)
+
+
+def test_check_that_has_not_applied_a_listed_split_is_rebased_and_confirms() -> None:
+    v = split_check(split_market(ALPACA_ADJUSTED, YAHOO_RAW))
+    assert v.status.status == "VERIFIED" and v.status.confirmed_by == ["Yahoo"]
+    assert v.status.value == pytest.approx(150.1) and v.status.date == "2026-11-04"
+    assert any("hasn't applied SOXX's 3-for-1 split (ex-date 2026-11-05)" in n for n in v.status.notes)
+    assert v.series is not None and list(v.series) == ALPACA_ADJUSTED  # the record is never touched
+
+
+def test_rebase_only_touches_dates_before_the_ex_date() -> None:
+    """16:25 on the ex-date: Yahoo's new bar is post-split, its history still isn't."""
+    days = SPLIT_DAYS.append(pd.DatetimeIndex(["2026-11-05"]))
+    v = split_check(split_market([*ALPACA_ADJUSTED, 152.0], [*YAHOO_RAW, 152.1], days))
+    assert v.status.status == "VERIFIED" and v.status.date == "2026-11-05"
+
+
+def test_split_listed_but_gap_is_not_the_split_factor_still_withholds() -> None:
+    """A listed split never excuses a different disagreement."""
+    v = split_check(split_market(ALPACA_ADJUSTED, [x * 3.06 for x in ALPACA_ADJUSTED]))
+    assert v.status.status == "CONFLICT" and v.series is None
+
+
+def test_split_shaped_gap_with_no_listed_split_withholds_and_says_why() -> None:
+    v = split_check(split_market(ALPACA_ADJUSTED, YAHOO_RAW, splits=[]))
+    assert v.status.status == "CONFLICT" and v.series is None
+    assert "constant 3.00x gap looks like a split, but no split is listed for SOXX" in v.status.notes[0]
+
+
+def test_split_lookup_failure_is_named_in_the_reason() -> None:
+    v = split_check(split_market(ALPACA_ADJUSTED, YAHOO_RAW, splits=[], splits_error="HTTP 403"))
+    assert v.status.status == "CONFLICT"
+    assert "the split lookup failed (HTTP 403)" in v.status.notes[0]
+
+
+def test_record_that_has_not_applied_a_listed_split_is_withheld() -> None:
+    """Yahoo re-based, Alpaca didn't: the record is on the old basis."""
+    v = split_check(split_market(YAHOO_RAW, ALPACA_ADJUSTED))
+    assert v.status.status == "CONFLICT" and v.series is None
+    assert "consolidated tape (Alpaca) hasn't applied SOXX's 3-for-1 split" in v.status.notes[0]
+
+
+def test_unadjusted_record_across_the_ex_date_is_withheld() -> None:
+    """Neither source re-based: they agree, but the record shows the split as a -67% day."""
+    days = SPLIT_DAYS.append(pd.DatetimeIndex(["2026-11-05"]))
+    v = split_check(split_market([*YAHOO_RAW, 152.0], [*YAHOO_RAW, 152.0], days))
+    assert v.status.status == "CONFLICT" and "jump -66%" in v.status.notes[0]
+
+
+def test_both_sources_already_rebased_is_plain_verified() -> None:
+    v = split_check(split_market(ALPACA_ADJUSTED, ALPACA_ADJUSTED))
+    assert v.status.status == "VERIFIED" and not any("split" in n for n in v.status.notes)

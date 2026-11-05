@@ -67,6 +67,15 @@ ECB_DAILY_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
 ECB_90D_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"
 ALPACA_BARS_URL = "https://data.alpaca.markets/v2/stocks/bars"
 ALPACA_SIP_MIN_AGE_MINUTES = 16  # free plan: SIP queries must end >= 15 minutes ago
+# Splits, so a check that hasn't re-based its history yet isn't read as a wrong number (Nov 5,
+# 2026: SOXX 3-for-1; Alpaca's split-adjusted bars were exactly 1/3 of Yahoo's on every date).
+# v1 is the current path; v1beta1 is the older one, tried if v1 is not found.
+ALPACA_CORPORATE_ACTIONS_URLS = (
+    "https://data.alpaca.markets/v1/corporate-actions",
+    "https://data.alpaca.markets/v1beta1/corporate-actions",
+)
+SPLIT_LOOKBACK_DAYS = 45  # ex-dates this far back still affect the compared window
+SPLIT_LOOKAHEAD_DAYS = 7  # Alpaca can apply an announced split before its ex-date
 EODHD_EOD_URL = "https://eodhd.com/api/eod/{symbol}"
 EODHD_LIVE_URL = "https://eodhd.com/api/real-time/{symbol}"
 EODHD_HISTORY_DAYS = 365  # the free plan serves one year; enough for SMA200 and RSI

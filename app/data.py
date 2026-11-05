@@ -30,6 +30,7 @@ import pandas as pd
 
 from app.config import (
     ALPACA_BARS_URL,
+    ALPACA_CORPORATE_ACTIONS_URLS,
     ALPACA_SIP_MIN_AGE_MINUTES,
     CBOE_HISTORY_URL,
     CBOE_INDEXES,
@@ -55,6 +56,8 @@ from app.config import (
     KRX_MAX_CALLS_PER_RUN,
     NYFED_EFFR_URL,
     SECRET_ENV_VARS,
+    SPLIT_LOOKAHEAD_DAYS,
+    SPLIT_LOOKBACK_DAYS,
     TALLY_TICKERS,
     TREASURY_CSV_URL,
     US_SESSION_DONE_NY,
@@ -73,6 +76,18 @@ class DataError(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class Split:
+    """A share split. `factor` = new shares per old share (3.0 for 3-for-1, 0.1 for 1-for-10).
+
+    A split-adjusted price before `ex_date` is the raw price divided by `factor`.
+    """
+
+    symbol: str
+    ex_date: pd.Timestamp
+    factor: float
+
+
 @dataclass
 class FetchResult:
     key: str  # "<input>@<source>"
@@ -81,6 +96,8 @@ class FetchResult:
     series: pd.Series | None
     error: str | None = None
     details: list[str] = field(default_factory=list)
+    splits: list[Split] = field(default_factory=list)  # Alpaca only: this symbol's recent splits
+    splits_error: str | None = None  # the split lookup failed (None = looked up, or not applicable)
 
     @property
     def ok(self) -> bool:
@@ -316,6 +333,28 @@ def parse_alpaca_bars(pages: list[dict[str, Any]], symbol: str) -> pd.Series:
     return _clean(pd.Series([float(b["c"]) for b in bars], index=stamps))
 
 
+def parse_alpaca_splits(pages: list[dict[str, Any]]) -> dict[str, list[Split]]:
+    """Forward and reverse splits from Alpaca's corporate-actions API, by symbol."""
+    out: dict[str, list[Split]] = {}
+    for page in pages:
+        actions = page.get("corporate_actions")
+        if not isinstance(actions, dict):
+            raise DataError("Alpaca corporate actions: no corporate_actions object")
+        for kind in ("forward_splits", "reverse_splits"):
+            for row in actions.get(kind) or []:
+                symbol, ex_date = row.get("symbol"), row.get("ex_date")
+                new_rate, old_rate = row.get("new_rate"), row.get("old_rate")
+                if not symbol or not ex_date or not new_rate or not old_rate:
+                    raise DataError(f"Alpaca {kind} row incomplete: {sorted(row)}")
+                factor = float(new_rate) / float(old_rate)
+                if factor <= 0 or factor == 1.0:
+                    raise DataError(f"Alpaca {kind} row has rate {new_rate}:{old_rate}")
+                out.setdefault(str(symbol), []).append(Split(str(symbol), pd.Timestamp(str(ex_date)), factor))
+    for splits in out.values():
+        splits.sort(key=lambda s: s.ex_date)
+    return out
+
+
 def _krx_number(text: Any) -> float | None:
     try:
         return float(str(text).replace(",", ""))
@@ -500,14 +539,54 @@ async def fetch_alpaca(client: httpx.AsyncClient) -> list[FetchResult]:
             params["page_token"] = page["next_page_token"]
     except Exception as exc:
         return [FetchResult(k, s, "alpaca", None, _error(exc)) for k, s in targets.items()]
+    splits: dict[str, list[Split]] = {}
+    splits_error: str | None = None
+    try:
+        splits = await fetch_alpaca_splits(client, list(targets.values()), headers, now)
+    except Exception as exc:  # the bars are still good; verify says the split check couldn't run
+        splits_error = _error(exc)
     out = []
     for key, symbol in targets.items():
         try:
             bars = drop_unfinished_us_session(parse_alpaca_bars(pages, symbol), now)
-            out.append(FetchResult(key, symbol, "alpaca", bars))
+            out.append(
+                FetchResult(key, symbol, "alpaca", bars, splits=splits.get(symbol, []), splits_error=splits_error)
+            )
         except Exception as exc:
             out.append(FetchResult(key, symbol, "alpaca", None, _error(exc)))
     return out
+
+
+async def fetch_alpaca_splits(
+    client: httpx.AsyncClient, symbols: list[str], headers: dict[str, str], now: datetime
+) -> dict[str, list[Split]]:
+    """Recent and announced splits for `symbols`. Raises if no endpoint answers."""
+    today = now.astimezone(NY).date()
+    params: dict[str, str] = {
+        "symbols": ",".join(symbols),
+        "types": "forward_split,reverse_split",
+        "start": (today - timedelta(days=SPLIT_LOOKBACK_DAYS)).isoformat(),
+        "end": (today + timedelta(days=SPLIT_LOOKAHEAD_DAYS)).isoformat(),
+        "limit": "1000",
+    }
+    last_exc: Exception | None = None
+    for url in ALPACA_CORPORATE_ACTIONS_URLS:
+        query = dict(params)
+        pages: list[dict[str, Any]] = []
+        try:
+            for _ in range(10):
+                page = (await get_with_retry(client, url, params=query, headers=headers)).json()
+                pages.append(page)
+                if not page.get("next_page_token"):
+                    break
+                query["page_token"] = page["next_page_token"]
+            return parse_alpaca_splits(pages)
+        except httpx.HTTPStatusError as exc:
+            last_exc = exc
+            if exc.response.status_code != 404:  # only a missing path moves on to the older one
+                raise
+    assert last_exc is not None
+    raise last_exc
 
 
 def drop_unfinished_us_session(series: pd.Series, now: datetime) -> pd.Series:

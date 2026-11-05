@@ -38,6 +38,15 @@ disagrees on 3+ of the last 5 compared dates is **systematic** and withholds the
 confirming copy agrees: Yahoo's ^TNX/^VIX are copies of Cboe's indexes, so they confirm our parse,
 not the methodology (first live run: Cboe ^IRX sat 7–10 bp under Treasury all week).
 
+Splits: Alpaca bars are split-adjusted (`adjustment=split`) as soon as Alpaca processes a split;
+Yahoo can re-base hours later. Each run looks up recent/announced splits (Alpaca corporate-actions,
+v1 then v1beta1). When one is listed and EVERY compared date before its ex-date differs by exactly
+that factor, Yahoo's earlier closes are re-based and compared (noted on the input). Nothing else is
+re-based. A record that hasn't applied a listed split (or jumps by the factor across the ex-date)
+is withheld. A constant clean-ratio gap with no listed split is still withheld, and says so.
+(Nov 5, 2026: SOXX 3-for-1; the 06:00 run withheld SOXX as "systematic" because Alpaca was exactly
+1/3 of Yahoo on 5 of 5 dates, which also blanked the page's "US data" line.)
+
 ## Last resort: Claude web search (`app/claude_fill.py`)
 Runs only when an input's record is MISSING/UNCONFIRMED or a session behind, AND Yahoo has a
 value for that exact date, AND that session is over, AND this month's spend is under

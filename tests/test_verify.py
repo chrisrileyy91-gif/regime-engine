@@ -239,6 +239,40 @@ def test_unadjusted_record_across_the_ex_date_is_withheld() -> None:
     assert v.status.status == "CONFLICT" and "jump -66%" in v.status.notes[0]
 
 
+# The 16:25 run on Nov 5 (after the first split fix): Yahoo had re-based Oct 30 but not its
+# Nov 2-4 bars, so only 3 of 5 dates were 3x and SOXX was still withheld. Nov 5 is Yahoo's
+# preliminary close from that run.
+CLOSE_DAYS = pd.to_datetime(["2026-10-29", "2026-10-30", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"])
+ALPACA_CLOSE_RUN = [*ALPACA_ADJUSTED, 131.9]
+YAHOO_HALF_REBASED = [171.3, 157.2, 453.6, 465.0, 450.4, 131.9]
+
+
+def test_check_rebased_on_only_some_dates_is_rebased_per_date() -> None:
+    v = split_check(split_market(ALPACA_CLOSE_RUN, YAHOO_HALF_REBASED, CLOSE_DAYS))
+    assert v.status.status == "VERIFIED" and v.status.date == "2026-11-05"
+    assert v.status.value == pytest.approx(131.9)
+    note = "Yahoo hasn't applied SOXX's 3-for-1 split (ex-date 2026-11-05) to 2026-11-02, 2026-11-03, 2026-11-04"
+    assert any(note in n for n in v.status.notes)
+    assert v.series is not None and list(v.series) == ALPACA_CLOSE_RUN  # the record is never touched
+
+
+def test_partial_rebase_never_excuses_a_date_off_by_something_else() -> None:
+    yahoo = [171.3, 157.2 * 1.5, 453.6, 465.0, 450.4, 131.9]  # Oct 30 is neither 1x nor 3x
+    v = split_check(split_market(ALPACA_CLOSE_RUN, yahoo, CLOSE_DAYS))
+    assert v.status.status == "CONFLICT" and v.series is None
+
+
+def test_record_rebased_on_only_part_of_its_history_is_withheld() -> None:
+    """Alpaca half-adjusted: Yahoo's mixed basis would 'agree' date by date, so the record's own
+    step across two pre-split closes is what has to catch it."""
+    alpaca = [513.9, 471.5, 151.2, 155.0, 150.1, 131.9]
+    yahoo = [513.9, 471.5, 453.6, 465.0, 450.4, 131.9]  # agrees with Alpaca on Oct 29-30
+    v = split_check(split_market(alpaca, yahoo, CLOSE_DAYS))
+    assert v.status.status == "CONFLICT" and v.series is None
+    assert "applied SOXX's 3-for-1 split (ex-date 2026-11-05) to only part of its history" in v.status.notes[0]
+    assert "between 2026-10-30 and 2026-11-02" in v.status.notes[0]
+
+
 def test_both_sources_already_rebased_is_plain_verified() -> None:
     v = split_check(split_market(ALPACA_ADJUSTED, ALPACA_ADJUSTED))
     assert v.status.status == "VERIFIED" and not any("split" in n for n in v.status.notes)

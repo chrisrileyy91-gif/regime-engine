@@ -15,10 +15,11 @@ For each input (config.INPUTS):
   6. A check with a newer date than the record becomes `preliminary`: shown, dated and
      labelled, never used in the phase call.
   7. Splits (Alpaca records only). Alpaca's bars are split-adjusted as soon as Alpaca processes
-     a split; Yahoo can re-base hours later. When Alpaca lists a split for the symbol and every
-     compared date before its ex-date differs by exactly that factor, the check is compared on
-     the post-split basis (noted). Only that exact pattern is re-based: anything else is still a
-     disagreement. A record that hasn't applied a listed split is withheld.
+     a split; Yahoo can re-base hours later, and piecemeal. When Alpaca lists a split for the
+     symbol and each compared date before its ex-date is either equal or off by exactly that
+     factor, the lagging dates are compared on the post-split basis (noted). Any other ratio is
+     still a disagreement. A record that hasn't applied a listed split, or applied it to only part
+     of its history, is withheld.
 """
 
 from __future__ import annotations
@@ -135,21 +136,56 @@ def _rebase_for_splits(primary: FetchResult, check: FetchResult, tolerance: floa
                 f"{(jump - 1) * 100:+.0f}% across the ex-date",
             )
 
+    # A record re-based only part of the way shows the split as a step between two pre-split
+    # closes. Checked before any re-basing of the check: a mixed record must never be confirmed.
+    step = _split_step(record[record.index < newest.ex_date], newest.factor)
+    if step is not None:
+        return _Rebase(
+            other,
+            conflict=f"{SOURCE_NAMES[primary.source]} has applied {what} to only part of its history "
+            f"(closes step by the split factor between {step})",
+        )
+
     common = record.index.intersection(other.index)[-CHECK_OVERLAP_SESSIONS:]
     factors = _cumulative_factors(common, splits)
     before = [d for d in common if factors[d] != 1.0]
     if not before:
         return _Rebase(other)  # the split is outside the compared window
     ratios = {d: float(other.loc[d]) / float(record.loc[d]) for d in before}
-    if all(_within(ratios[d], 1.0, tolerance) for d in before):
+    applied = [d for d in before if _within(ratios[d], 1.0, tolerance)]
+    if len(applied) == len(before):
         return _Rebase(other)  # both already on the post-split basis
-    if all(_within(ratios[d], factors[d], tolerance) for d in before):
+    unapplied = [d for d in before if _within(ratios[d], factors[d], tolerance)]
+    if len(unapplied) == len(before):
         rebased = other / _cumulative_factors(other.index, splits)
         note = f"{name} hasn't applied {what} yet; its earlier closes were compared after re-basing"
+        return _Rebase(rebased, note=note)
+    if unapplied and len(applied) + len(unapplied) == len(before):
+        # Nov 5, 16:25: Yahoo had re-based Oct 30 but not its Nov 2-4 bars, so 3 of 5 dates were
+        # exactly 3x and the all-or-nothing rule withheld SOXX. Each date is either on the new basis
+        # or off by exactly the factor; only the lagging dates are re-based.
+        rebased = other.copy()
+        for d in unapplied:
+            rebased.loc[d] = float(other.loc[d]) / factors[d]
+        days = ", ".join(_fmt_day(d) for d in unapplied)
+        note = f"{name} hasn't applied {what} to {days} yet; those closes were compared after re-basing"
         return _Rebase(rebased, note=note)
     if all(_within(ratios[d], 1.0 / factors[d], tolerance) for d in before):
         return _Rebase(other, conflict=f"{SOURCE_NAMES[primary.source]} hasn't applied {what}; {name} has")
     return _Rebase(other)  # some other disagreement: let the normal checks judge it
+
+
+def _split_step(pre_split: pd.Series, factor: float) -> str | None:
+    """Two consecutive pre-split closes nearer the split factor apart (either way) than unchanged:
+    a half re-based record. Same rule as the ex-date jump test; the step also carries that
+    session's real move (Oct 30 -> Nov 2 was -3.8% on top of 1/3), so no tight band around the
+    factor. For 3-for-1 that is a one-session move beyond -42% / +73%, which an ETF does not make."""
+    days, values = list(pre_split.index), [float(v) for v in pre_split]
+    for i in range(1, len(values)):
+        step = abs(math.log(values[i] / values[i - 1]))
+        if min(abs(step - math.log(factor)), abs(step + math.log(factor))) < step:
+            return f"{_fmt_day(pd.Timestamp(days[i - 1]))} and {_fmt_day(pd.Timestamp(days[i]))}"
+    return None
 
 
 CLEAN_SPLIT_FACTORS = (2.0, 3.0, 4.0, 5.0, 8.0, 10.0, 15.0, 20.0)

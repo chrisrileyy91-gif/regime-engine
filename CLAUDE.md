@@ -46,6 +46,12 @@ re-based. A record that hasn't applied a listed split (or jumps by the factor ac
 is withheld. A constant clean-ratio gap with no listed split is still withheld, and says so.
 (Nov 5, 2026: SOXX 3-for-1; the 06:00 run withheld SOXX as "systematic" because Alpaca was exactly
 1/3 of Yahoo on 5 of 5 dates, which also blanked the page's "US data" line.)
+Yahoo re-bases piecemeal: at 16:25 the same day it had re-based Oct 30 but not its Nov 2–4 bars, so
+only 3 of 5 dates were 3x and the all-or-nothing rule withheld SOXX again. Re-basing is per date:
+each pre-split compared date must be either equal or off by exactly the factor, and only the lagging
+dates are re-based (named in the note). Any other ratio on any date still withholds. Because a mixed
+check could then "agree" with a mixed record, the record itself must not step by the split factor
+between two pre-split closes (same nearest-to-factor rule as the ex-date jump); if it does, withheld.
 
 ## Last resort: Claude web search (`app/claude_fill.py`)
 Runs only when an input's record is MISSING/UNCONFIRMED or a session behind, AND Yahoo has a

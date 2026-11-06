@@ -62,18 +62,21 @@ def stress(f: MarketFeatures, drivers: list[Driver]) -> Stress:
     active = [d for d in drivers if d.state == "ACTIVE"]
     unknown = [d for d in drivers if d.state == "UNKNOWN"]
     reasons = [d.name for d in active]
-    if f.vix is not None and f.vix > STRESSED_VIX:
+    vix_read = any(d.key == "risk_off" and d.state != "UNKNOWN" for d in drivers)  # same-session VIX only
+    if vix_read and f.vix is not None and f.vix > STRESSED_VIX:
         level = "STRESSED"
         reasons.insert(0, f"VIX above {STRESSED_VIX:.0f}")
     elif len(active) >= 2:
         level = "STRESSED"
     elif len(active) == 1:
         level = "ELEVATED"
-    elif len(unknown) == len(drivers):
+    elif unknown:
+        # Calm is a measurement, not a default: nothing active is only Calm when every driver was
+        # actually read for this session (Nov 5 16:25 said Calm with SOXX withheld and VIX a day old).
         level = "UNKNOWN"
     else:
         level = "CALM"
-    if unknown and level != "UNKNOWN":
+    if unknown:
         reasons.append(f"couldn't check {', '.join(d.name.lower() for d in unknown)}")
     return Stress(level=level, label=STRESS_LABELS[level], reasons=reasons)
 

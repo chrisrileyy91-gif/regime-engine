@@ -42,9 +42,10 @@ def test_stress_levels(overrides: dict[str, object], expected: str) -> None:
 
 
 def test_unknown_inputs_are_named() -> None:
+    """Nothing active is only Calm when every driver was read; one unknown makes it Unknown."""
     f = calm(vix=None)
     s = stress(f, build_drivers(f, {}))
-    assert s.level == "CALM" and any("couldn't check" in r for r in s.reasons)
+    assert s.level == "UNKNOWN" and any("couldn't check" in r for r in s.reasons)
     f = calm(vix=None, tnx_chg_1d_bps=None, tnx_delta_z=None, soxx_rsi=None)
     assert stress(f, build_drivers(f, {})).level == "UNKNOWN"
 
@@ -218,3 +219,23 @@ def test_a_failed_headline_read_is_not_shown_as_a_label() -> None:
     first = tally(verify_all(results, TODAY.date()), extras).days[0].date
     t = tally(verify_all(results, TODAY.date()), extras, {first: {"failed": 1, "last_try": "x", "problem": "y"}})
     assert t.days[0].news is None and t.news_counts == {"unlabelled": 2}
+
+
+def test_a_session_behind_input_is_unknown_not_quiet() -> None:
+    """Nov 5 16:25: SOXX withheld and Cboe's VIX settle not yet posted. Yesterday's VIX (16.6)
+    read as QUIET and the page said Calm on a -12% semis day with VIX at 28."""
+    f = calm(vix=16.61, soxx_rsi=None)
+    f.dates.update({"y10": "2026-11-05", "igv": "2026-11-05", "vix": "2026-11-04"})
+    f.dates.pop("soxx", None)
+    drivers = build_drivers(f, {})
+    assert {d.key: d.state for d in drivers} == {"liquidity": "QUIET", "risk_off": "UNKNOWN", "semis": "UNKNOWN"}
+    assert stress(f, drivers).level == "UNKNOWN"
+
+
+def test_a_session_behind_input_cannot_fire_either() -> None:
+    """Yesterday's VIX 31 says nothing about today: unknown, and no VIX>30 override."""
+    f = calm(vix=31.0)
+    f.dates.update({"y10": "2026-11-05", "igv": "2026-11-05", "soxx": "2026-11-05", "vix": "2026-11-04"})
+    drivers = build_drivers(f, {})
+    assert next(d for d in drivers if d.key == "risk_off").state == "UNKNOWN"
+    assert stress(f, drivers).level == "UNKNOWN"

@@ -98,7 +98,17 @@ def test_diagnosis_flags_rates_a_session_behind_stocks() -> None:
     f = features(soxx_chg_1d_pct=-2.6)
     f.dates["y10"] = "2026-10-09"
     text = diagnose(f, build_drivers(f, {}))
-    assert "The official 10Y close for Tue Oct 13 isn't available yet, so that read uses Fri Oct 9." in text
+    assert "The official 10Y close for Tue Oct 13 isn't in yet; Fri Oct 9's isn't used for today's read." in text
+    assert "Couldn't check: liquidity drain" in text
+
+
+def test_diagnosis_on_a_bond_holiday_says_yields_did_not_move() -> None:
+    """Veterans Day: stocks trade, Treasuries don't. The 10Y's last close is Tuesday's."""
+    f = features(soxx_chg_1d_pct=-2.6)
+    f.dates.update({"soxx": "2026-11-11", "vix": "2026-11-11", "igv": "2026-11-11", "y10": "2026-11-10"})
+    drivers = build_drivers(f, {})
+    assert next(d for d in drivers if d.key == "liquidity").state == "QUIET"
+    assert "The bond market was closed Wed Nov 11, so yields didn't move." in diagnose(f, drivers)
 
 
 def test_preliminary_attached_to_metric() -> None:

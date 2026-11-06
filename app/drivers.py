@@ -13,7 +13,7 @@ when the rates data is a session behind the stock data, the diagnosis says so.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from app.config import THRESHOLDS, Thresholds
 from app.features import MarketFeatures
@@ -33,16 +33,46 @@ def day_label(iso: str | None) -> str:
     return f"{d:%a %b} {d.day}"  # no %-d: it breaks on Windows
 
 
+SESSION_INPUTS = ("y10", "vix", "soxx", "igv")  # US-session inputs; the newest official date among them is the session
+
+
+def session_day(f: MarketFeatures) -> str | None:
+    """The US session being read: the newest official close among the US inputs."""
+    days = [day for k in SESSION_INPUTS if (day := f.dates.get(k))]
+    return max(days) if days else None
+
+
+def bond_market_closed(iso: str) -> bool:
+    """SIFMA's full closes on days stocks trade: Columbus Day (2nd Monday of October) and Veterans
+    Day (Nov 11 on a weekday). No Treasury trading means no yield move, not an unknown one."""
+    d = date.fromisoformat(iso)
+    columbus = d.month == 10 and d.weekday() == 0 and 8 <= d.day <= 14
+    veterans = d.month == 11 and d.day == 11 and d.weekday() < 5
+    return columbus or veterans
+
+
+def _same_session(met: bool | None, as_of: str | None, session: str | None, *, bond: bool = False) -> bool | None:
+    """A trigger is read only on the session's own close. Nov 5 16:25: Cboe hadn't posted the VIX
+    settle, so yesterday's 16.6 (not today's 28.2) kept risk-off QUIET and the page said Calm on a
+    -12% semis day. A session-behind value is unknown, never quiet."""
+    if met is None or as_of is None or session is None or as_of >= session:
+        return met
+    if bond and bond_market_closed(session) and as_of >= str(date.fromisoformat(session) - timedelta(days=4)):
+        return False
+    return None
+
+
 def build_drivers(f: MarketFeatures, inputs: dict[str, InputStatus], t: Thresholds = THRESHOLDS) -> list[Driver]:
     d = f.dates
     prelim = {k: s.preliminary for k, s in inputs.items()}
+    session = session_day(f)
     liquidity = [
         DriverMetric(
             label="10Y 1-session change",
             value=f.tnx_chg_1d_bps,
             unit="bps",
             trigger=f"> +{t.tnx_1d_spike_bps:.0f} bps",
-            met=_gt(f.tnx_chg_1d_bps, t.tnx_1d_spike_bps),
+            met=_same_session(_gt(f.tnx_chg_1d_bps, t.tnx_1d_spike_bps), d.get("y10"), session, bond=True),
             as_of=d.get("y10"),
         ),
         DriverMetric(
@@ -50,7 +80,7 @@ def build_drivers(f: MarketFeatures, inputs: dict[str, InputStatus], t: Threshol
             value=f.tnx_delta_z,
             unit="z",
             trigger=f"> +{t.tnx_delta_z}σ",
-            met=_gt(f.tnx_delta_z, t.tnx_delta_z),
+            met=_same_session(_gt(f.tnx_delta_z, t.tnx_delta_z), d.get("y10"), session, bond=True),
             as_of=d.get("y10"),
         ),
         DriverMetric(
@@ -69,7 +99,7 @@ def build_drivers(f: MarketFeatures, inputs: dict[str, InputStatus], t: Threshol
             value=f.vix,
             unit="pts",
             trigger=f"> {t.vix_level:.0f}",
-            met=_gt(f.vix, t.vix_level),
+            met=_same_session(_gt(f.vix, t.vix_level), d.get("vix"), session),
             as_of=d.get("vix"),
             preliminary=prelim.get("vix"),
         ),
@@ -83,7 +113,7 @@ def build_drivers(f: MarketFeatures, inputs: dict[str, InputStatus], t: Threshol
             value=f.soxx_rsi,
             unit="",
             trigger=f"< {t.semi_rsi_digestion:.0f}",
-            met=_lt(f.soxx_rsi, t.semi_rsi_digestion),
+            met=_same_session(_lt(f.soxx_rsi, t.semi_rsi_digestion), d.get("soxx"), session),
             as_of=d.get("soxx"),
         ),
         DriverMetric(
@@ -178,14 +208,20 @@ def diagnose(f: MarketFeatures, drivers: list[Driver], t: Thresholds = THRESHOLD
             "momentum. Look at company or sector news."
         )
     if unknown:
-        sentences.append(f"Couldn't check: {', '.join(d.name.lower() for d in unknown)} (official data unavailable).")
+        sentences.append(
+            f"Couldn't check: {', '.join(d.name.lower() for d in unknown)} (no official close for this session)."
+        )
 
-    for key, what in (("y10", "10Y"), ("vix", "VIX")):
+    session = session_day(f)
+    for key, what in (("y10", "10Y"), ("vix", "VIX"), ("soxx", "SOXX")):
         day = f.dates.get(key)
-        if stock_day and day and day < stock_day:
+        if session and day and day < session:
+            if key == "y10" and bond_market_closed(session):
+                sentences.append(f"The bond market was closed {day_label(session)}, so yields didn't move.")
+                continue
             sentences.append(
-                f"The official {what} close for {day_label(stock_day)} isn't available yet, "
-                f"so that read uses {day_label(day)}."
+                f"The official {what} close for {day_label(session)} isn't in yet; "
+                f"{day_label(day)}'s isn't used for today's read."
             )
     return " ".join(sentences)
 

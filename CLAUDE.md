@@ -137,7 +137,12 @@ software group it alone faked an acceleration on the first real read.
 
 ## Today (daily)
 - Drivers (same session only): 10Y +10 bps or z > 1.5 · VIX > 20 · SOXX RSI < 40.
-- Stress: 0 active = Calm, 1 = Elevated, 2+ or VIX > 30 = Stressed, all unknown = Unknown.
+- Stress: 1 active = Elevated, 2+ or VIX > 30 = Stressed; 0 active = Calm only if all three drivers
+  were read, otherwise Unknown. The session is the newest official date among 10Y, VIX, SOXX, IGV; a
+  trigger whose input is older than that is unknown (never quiet, never active, no VIX > 30
+  override). Nov 5 16:25 said Calm on a −12% semis day: SOXX withheld and the VIX settle not yet
+  posted, so yesterday's 16.6 stood in for today's 28.2. Bond holidays (Columbus Day, Veterans Day
+  on a weekday) are the exception: a missing 10Y there is "yields didn't move", liquidity QUIET.
 - Tally: the last 20 sessions with SOXX ≤ −1.5%, each tagged in order:
   1. **rates** — 10Y or 30Y up ≥ 10 bps at the close OR at the intraday high vs the prior close, a
      10Y close z ≥ 1.5, or the Treasury 2Y up ≥ 10 bps (policy repricing: Aug 28 hike odds jumped to

@@ -117,6 +117,17 @@ def excess_returns(target: pd.Series, base: pd.Series, window: int, min_sessions
     return (frame["t"] - beta * frame["b"]).dropna()
 
 
+def trailing_rank(series: pd.Series, window: int, min_sessions: int) -> pd.Series:
+    """Each value's percentile (0-100) among the up-to-`window` values before it (no look-ahead)."""
+    values = series.to_numpy(float)
+    out = {}
+    for i in range(len(values)):
+        past = values[max(0, i - window) : i]
+        if len(past) >= min_sessions:
+            out[series.index[i]] = float((past < values[i]).mean() * 100.0)
+    return pd.Series(out, dtype=float)
+
+
 def last_valid(series: pd.Series) -> float | None:
     clean = series.dropna()
     if clean.empty:

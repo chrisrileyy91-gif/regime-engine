@@ -26,10 +26,13 @@ class Thresholds:
     # Nov 10, 2026: 10Y +12 bps, SOXX -0.1%, and the page read Elevated; over the 120 sessions to
     # then a 10 bps rise in the 10Y went with SOXX UP 2.1% (broad market held fixed).
     yields_count_soxx_pct: float = -1.5
-    # Funding card (shown, not counted): the debt-funded AI names' move beyond what their usual
-    # sensitivity to SOXX predicts, as a z vs the prior 60 sessions of the same.
-    funding_excess_z: float = -1.5
-    funding_z_window: int = 60
+    # Funding backdrop: the debt-funded AI names' move beyond what their usual sensitivity to SOXX
+    # predicts, summed over the last 20 sessions and ranked against the past year of the same. A
+    # level, so it lives in the backdrop. Its first shape was a same-day trigger (z < -1.5): on the
+    # 250-session replay it fired on 3 of 63 semis drops and mostly on rallies the basket lagged.
+    funding_window: int = 20
+    funding_rank_window: int = 250
+    funding_rank_min: int = 120
     # Tally: share of a semis drop that the broad market and yields explain (rolling regression of
     # SOXX's daily return on the equal-weight S&P 500's return and the 10Y change, prior sessions only).
     decomp_window: int = 120

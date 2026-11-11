@@ -70,11 +70,11 @@ class DriverMetric(BaseModel):
 
 
 class Driver(BaseModel):
-    key: str  # liquidity / risk_off / semis / funding
+    key: str  # liquidity / risk_off / semis
     name: str
     asks: str  # the plain-English question this driver answers
     state: str  # ACTIVE / QUIET / UNKNOWN
-    counted: bool = True  # False = shown on the page, never part of the stress label
+    counted: bool = True  # False = a trial card: shown on the page, never part of the stress label
     metrics: list[DriverMetric]
 
 

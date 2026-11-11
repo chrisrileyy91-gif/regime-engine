@@ -38,8 +38,8 @@ the "how we go up" catalysts, and the growth series behind it all.
 30 reads. Every number names its source and date.
 
 The stress label counts only what moved that session: a VIX spike (+10%), a semis sell-off (SOXX
-down 4% or an unusual drop), and a 10Y jump only when chips fell with it. A fourth card, AI
-funding stress, is shown but not counted while it is on trial. Levels (VIX above 20, RSI below 40) are backdrop. The
+down 4% or an unusual drop), and a 10Y jump only when chips fell with it. The backdrop
+line carries the debt-funded AI names' 20-session move against what chips explain. Levels (VIX above 20, RSI below 40) are backdrop. The
 tally reports how much of each semis drop the broad market and yields explain, from a rolling
 regression on prior sessions. `python -m app.replay` (or the "Replay stress label" workflow)
 rebuilds the label over history and scores it against SOXX's own moves.

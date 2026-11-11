@@ -155,11 +155,15 @@ software group it alone faked an acceleration on the first real read.
 - A yield jump counts toward stress only when SOXX also fell 1.5%+ that session (`yields_counted`).
   The card still shows ACTIVE and the reasons say "not counted". Nov 10, 2026: 10Y +12 bps, SOXX
   −0.1%, page read Elevated; over the 120 sessions to then a 10 bps rise went with SOXX +2.1%.
-- Funding card (`key="funding"`, `counted=False`): the CRWV/ORCL/NBIS average move minus what its
-  prior-120-session slope on SOXX predicts (`indicators.excess_returns`), as a z vs the prior 60
-  (fires < −1.5), or HYG < −0.75%. Shown, logged in `active_drivers`, named in the diagnosis and
-  reasons, never in the label and never blocks Calm. It stays on trial until the replay says it adds
-  something the semis move doesn't.
+- Funding backdrop (a level, so it is in `backdrop`, never a driver): the CRWV/ORCL/NBIS average
+  daily move minus what its prior-120-session slope on SOXX predicts (`indicators.excess_returns`),
+  summed over 20 sessions, with its percentile against the past year of the same
+  (`indicators.trailing_rank`). Logged per read in `history.json` (`funding_excess_20d`,
+  `funding_rank`). Its first shape (Nov 11, 2026 morning) was a same-day trial card, z < −1.5 or
+  HYG < −0.75%: on the 250-session replay it fired on 3 of 63 semis drops, and SOXX averaged +1.8%
+  on the days it fired (it caught rallies the basket lagged). `Driver.counted` is kept for a future
+  trial card. It earns a place in the label only if the replay shows it says something about the
+  following sessions.
 - Stress: 1 active = Elevated, 2+ or VIX > 30 = Stressed; 0 active = Calm only if all three counted drivers
   were read, otherwise Unknown. The session is the newest official date among 10Y, VIX, SOXX, IGV; a
   trigger whose input is older than that is unknown (never quiet, never active, no VIX > 30
@@ -221,16 +225,17 @@ software group it alone faked an acceleration on the first real read.
 
 ## Known gaps (do not paper over)
 - Thresholds are not fitted. `python -m app.replay` (workflow "Replay stress label") rebuilds the
-  old and new stress labels over history and tabulates them against SOXX's same-day move; it is a
+  old and new stress labels over history and tabulates them against SOXX's same-day move, and
+  groups sessions by the funding backdrop's rank against SOXX's next five sessions; it is a
   description, not a fit, and the new label includes SOXX's own move by construction. The
   explained-share threshold (0.5), the SOXX floor (−4%), the 2Y band (±0.25) and the credit
   thresholds are judgment calls until someone fits them.
 - The explained share is a two-factor linear fit on 120 sessions: beta drifts, RSP holds some
   chip names, and a day when yields spike intraday and reverse reads as unexplained (it is still
   listed as a yield jump). Treat it as a rough split, not a measurement to the point.
-- The funding card's basket is three names (one is also a capex spender) and its excess is a
-  one-factor fit: a company-specific day (an earnings miss) fires it as readily as funding stress.
-  HYG rarely moves 0.75%. Neither threshold is fitted.
+- The funding backdrop's basket is three names (one is also a capex spender) and its excess is a
+  one-factor fit: one company's bad month moves it as readily as funding stress. The replay's
+  next-five-session scoring uses overlapping windows over one year, so it describes, it doesn't test.
 - The funding gauge reads capex vs operating cash flow only. Debt issuance is not read: filings
   omit quarters with no issuance, so a gap can't be told from a zero. Leases and off-balance-sheet
   financing (the CoreWeave-style deals the headlines are about) are invisible to it.

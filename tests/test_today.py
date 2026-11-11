@@ -240,6 +240,23 @@ def test_sensitivity_recovers_the_betas_and_prints_in_the_summary() -> None:
     assert "a 10 bps rise in the 10Y has gone with SOXX" in t.summary
 
 
+def test_funding_backdrop_features_sum_the_excess_over_twenty_sessions() -> None:
+    from app.features import build_features
+
+    rng = np.random.default_rng(8)
+    n = 420
+    chips = rng.normal(0, 0.01, n)
+    own = rng.normal(0, 0.004, n)
+    own[-20:] -= 0.01  # the debt-funded name loses an extra 1% a day for 20 sessions
+    soxx = series(list(100.0 * np.cumprod(1 + chips)))
+    name = series(list(50.0 * np.cumprod(1 + 1.6 * chips + own)))
+    f = build_features(verify_all(market(soxx=soxx), TODAY.date()), {"lev_crwv": name})
+    assert f.funding_excess_20d_pct == pytest.approx(-20.0, abs=4.0)  # not the raw gap: beta is netted out
+    assert f.funding_rank is not None and f.funding_rank < 5 and f.dates["funding"] == str(TODAY.date())
+    assert f.funding_basket_20d_pct is not None and f.funding_soxx_20d_pct is not None
+    assert build_features(verify_all(market(), TODAY.date()), {}).funding_excess_20d_pct is None
+
+
 def test_decompose_uses_only_earlier_sessions_and_needs_history() -> None:
     rng = np.random.default_rng(5)
     mkt = series(list(rng.normal(0, 0.5, 200)))
@@ -353,12 +370,7 @@ def test_a_session_behind_input_is_unknown_not_quiet() -> None:
     f.dates.update({"y10": "2026-11-05", "igv": "2026-11-05", "vix": "2026-11-04"})
     f.dates.pop("soxx", None)
     drivers = build_drivers(f, {})
-    assert {d.key: d.state for d in drivers} == {
-        "liquidity": "QUIET",
-        "risk_off": "UNKNOWN",
-        "semis": "UNKNOWN",
-        "funding": "QUIET",
-    }
+    assert {d.key: d.state for d in drivers} == {"liquidity": "QUIET", "risk_off": "UNKNOWN", "semis": "UNKNOWN"}
     assert stress(f, drivers).level == "UNKNOWN"
 
 

@@ -9,14 +9,10 @@ label for every past session two ways and shows how each lines up with SOXX's sa
   new                   : VIX up 10%+ · SOXX down 4%+ or an unusual drop (z) · a 10Y jump, counted
                           only when SOXX also fell 1.5%+
 
-It also scores the funding card, which is shown on the page but not counted: the debt-funded AI
-names' move beyond their usual sensitivity to SOXX (z < -1.5), or HYG down 0.75%+.
-
-A label that measures the day should put the big down days in Stressed/Elevated and the ordinary
-days in Calm. A label that tracks a level puts whole weeks in one bucket whatever happened.
-Note the new label includes SOXX's own move, so it lines up with SOXX by construction; the
-useful columns are how often each label fires and what it says on the worst days. Nothing here
-predicts anything: it is a same-day description, scored as one.
+It also scores the funding backdrop: the debt-funded AI names' move beyond their usual sensitivity
+to SOXX, summed over 20 sessions and ranked against the past year. Sessions are grouped by that
+rank and scored on what SOXX did over the NEXT five sessions. Five-session windows overlap, so
+neighbouring rows share most of their outcome: read the table as a description, not a test.
 
 Needs the Alpaca keys (SOXX). Reads only verified series; changes nothing and publishes nothing.
 """
@@ -34,7 +30,7 @@ import pandas as pd
 
 from app.config import STRESSED_VIX, TALLY_DROP_PCT, THRESHOLDS, Thresholds
 from app.data import fetch_all
-from app.indicators import excess_returns, wilder_rsi
+from app.indicators import excess_returns, trailing_rank, wilder_rsi
 from app.service import tally_extras
 from app.verify import verify_all
 
@@ -47,8 +43,9 @@ class Row:
     soxx_pct: float
     old: str
     new: str
-    funding: bool | None = None  # the trial card: active, quiet, or not readable that day
-    next_pct: float | None = None  # SOXX's move the following session
+    funding_rank: float | None = None  # 20-session excess of the debt-funded names, percentile vs the past year
+    next5_pct: float | None = None  # SOXX over the following five sessions
+    next5_drops: int | None = None  # how many of those five fell 1.5%+
 
 
 def _level(active: int, vix: float) -> str:
@@ -64,7 +61,6 @@ def replay(
     sessions: int,
     t: Thresholds = THRESHOLDS,
     basket: list[pd.Series] | None = None,
-    credit: pd.Series | None = None,
 ) -> list[Row]:
     """Both labels for each of the last `sessions` sessions SOXX and VIX share. A session with no
     10Y close (a bond holiday) reads as no yield move, as the live page does."""
@@ -86,10 +82,10 @@ def replay(
         if names
         else pd.Series(dtype=float)
     )
-    ex_base = excess.shift(1).rolling(t.funding_z_window, min_periods=t.funding_z_window)
-    ex_z = (excess - ex_base.mean()) / ex_base.std(ddof=1)
-    hyg = pd.Series(dtype=float) if credit is None else (credit.astype(float).pct_change() * 100.0).dropna()
-    nxt = ret.shift(-1)
+    rolled = excess.rolling(t.funding_window, min_periods=t.funding_window).sum().dropna()
+    rank = trailing_rank(rolled, t.funding_rank_window, t.funding_rank_min) if not rolled.empty else rolled
+    ahead = (1 + ret / 100.0).rolling(5).apply(lambda w: float(w.prod()), raw=True).shift(-5)
+    drops_ahead = (ret <= TALLY_DROP_PCT).astype(float).rolling(5).sum().shift(-5)
 
     rows = []
     for ts in frame.index[-sessions:]:
@@ -101,19 +97,17 @@ def replay(
         sold = ret[ts] < t.soxx_drop_floor_pct or ret_z[ts] < t.soxx_drop_z
         counted = liq and ret[ts] <= t.yields_count_soxx_pct  # a yield jump counts only when chips fell
         new = int(counted) + int(vix_chg[ts] > t.vix_jump_pct) + int(sold)
-        z = ex_z.get(ts)
-        move = hyg.get(ts)
-        parts: list[bool | None] = [None if z is None or pd.isna(z) else bool(z < t.funding_excess_z)]
-        parts.append(None if move is None or pd.isna(move) else bool(move < t.credit_move_pct))
-        funding = True if True in parts else (None if None in parts else False)
+        pct = rank.get(ts)
+        fwd, falls = ahead[ts], drops_ahead[ts]
         rows.append(
             Row(
                 str(ts.date()),
                 round(float(ret[ts]), 2),
                 _level(old, level),
                 _level(new, level),
-                funding,
-                None if pd.isna(nxt[ts]) else round(float(nxt[ts]), 2),
+                None if pct is None or pd.isna(pct) else round(float(pct), 1),
+                None if pd.isna(fwd) else round((float(fwd) - 1) * 100.0, 2),
+                None if pd.isna(falls) else int(falls),
             )
         )
     return rows
@@ -144,29 +138,29 @@ def _mean(values: list[float]) -> str:
 
 
 def funding_lines(rows: list[Row]) -> list[str]:
-    """Does the funding card add anything? Same-day it should fire on the drops; the open question
-    is whether it says anything the semis move doesn't, so the next session is shown too."""
-    read = [r for r in rows if r.funding is not None]
+    """Does the funding backdrop say anything about what comes next? Sessions grouped by how the
+    debt-funded names have done against chips over 20 sessions, scored on SOXX's next five."""
+    read = [r for r in rows if r.funding_rank is not None and r.next5_pct is not None and r.next5_drops is not None]
+    title = "### Funding backdrop (debt-funded AI names vs chips, 20 sessions)"
     if not read:
-        return ["### Funding card (shown, not counted)", "", "No sessions with the basket or HYG available."]
+        return [title, "", "No sessions with the basket and a year of history available."]
     out = [
-        f"### Funding card (shown, not counted), {len(read)} sessions read",
+        f"{title}, {len(read)} sessions read",
         "",
-        "| Card | Days | Mean SOXX that day | Days SOXX fell 1.5%+ | Mean SOXX next session |",
-        "|---|---|---|---|---|",
+        "| 20-session excess, rank vs past year | Days | Mean SOXX next 5 sessions | Next-5 sessions that fell 1.5%+ |",
+        "|---|---|---|---|",
     ]
-    for name, on in (("Active", True), ("Quiet", False)):
-        days = [r for r in read if r.funding is on]
-        drops = sum(1 for r in days if r.soxx_pct <= TALLY_DROP_PCT)
-        share = "n/a" if not days else f"{drops / len(days) * 100:.0f}%"
-        nxt = [r.next_pct for r in days if r.next_pct is not None]
-        out.append(f"| {name} | {len(days)} | {_mean([r.soxx_pct for r in days])} | {share} | {_mean(nxt)} |")
-    falls = [r for r in read if r.soxx_pct <= TALLY_DROP_PCT]
-    if falls:
-        hit = sum(1 for r in falls if r.funding)
-        out += ["", f"Of {len(falls)} sessions where SOXX fell 1.5%+, the card was active on {hit}."]
-    calm = [r for r in read if r.funding and r.new == "CALM"]
-    out.append(f"Active on {len(calm)} sessions the stress label read Calm (what it sees that the label doesn't).")
+    for name, lo, hi in (
+        ("Bottom fifth (lagging chips)", 0.0, 20.0),
+        ("Middle", 20.0, 80.0),
+        ("Top fifth", 80.0, 100.1),
+    ):
+        days = [r for r in read if r.funding_rank is not None and lo <= r.funding_rank < hi]
+        drops = [r.next5_drops for r in days if r.next5_drops is not None]
+        share = "n/a" if not drops else f"{sum(drops) / (5 * len(drops)) * 100:.0f}%"
+        out.append(
+            f"| {name} | {len(days)} | {_mean([r.next5_pct for r in days if r.next5_pct is not None])} | {share} |"
+        )
     return out
 
 
@@ -197,7 +191,7 @@ def render(rows: list[Row]) -> str:
     return "\n".join(lines) + "\n"
 
 
-Inputs = tuple[pd.Series | None, pd.Series | None, pd.Series | None, list[str], list[pd.Series], pd.Series | None]
+Inputs = tuple[pd.Series | None, pd.Series | None, pd.Series | None, list[str], list[pd.Series]]
 
 
 async def _series() -> Inputs:
@@ -206,20 +200,20 @@ async def _series() -> Inputs:
     basket = [v for k, v in sorted(extras.items()) if k.startswith("lev_")]
     verified = verify_all(results, datetime.now(timezone.utc).date())
     notes = [f"{k}: {v.status.status} ({'; '.join(v.status.notes)})" for k, v in verified.items() if v.series is None]
-    return verified["soxx"].series, verified["vix"].series, verified["y10"].series, notes, basket, extras.get("credit")
+    return verified["soxx"].series, verified["vix"].series, verified["y10"].series, notes, basket
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--sessions", type=int, default=250)
     args = parser.parse_args(argv)
-    soxx, vix, y10, notes, basket, credit = asyncio.run(_series())
+    soxx, vix, y10, notes, basket = asyncio.run(_series())
     if soxx is None or vix is None or y10 is None:
         print("Replay needs verified SOXX, VIX and 10Y series. Withheld this run:")
         for note in notes:
             print(f"  {note}")
         return 1
-    text = render(replay(soxx, vix, y10, args.sessions, basket=basket, credit=credit))
+    text = render(replay(soxx, vix, y10, args.sessions, basket=basket))
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

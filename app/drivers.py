@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from app.config import THRESHOLDS, Thresholds
+from app.config import AI_LEVERAGE_TICKERS, THRESHOLDS, Thresholds
 from app.features import MarketFeatures
 from app.models import Condition, Driver, DriverMetric, InputStatus
 from app.regime import _any, _gt, _lt
@@ -142,32 +142,6 @@ def build_drivers(f: MarketFeatures, inputs: dict[str, InputStatus], t: Threshol
             as_of=d.get("soxx"),
         ),
     ]
-    funding = [
-        DriverMetric(
-            label="Debt-funded AI names, beyond their usual move with chips",
-            value=f.funding_excess_pct,
-            unit="chg",
-            trigger=None,
-            met=None,
-            as_of=d.get("funding"),
-        ),
-        DriverMetric(
-            label="How unusual that was",
-            value=f.funding_excess_z,
-            unit="z",
-            trigger=f"< {t.funding_excess_z}σ",
-            met=_same_session(_lt(f.funding_excess_z, t.funding_excess_z), d.get("funding"), session),
-            as_of=d.get("funding"),
-        ),
-        DriverMetric(
-            label="High-yield bonds (HYG) 1-session move",
-            value=f.credit_chg_1d_pct,
-            unit="chg",
-            trigger=f"< {t.credit_move_pct}%",
-            met=_same_session(_lt(f.credit_chg_1d_pct, t.credit_move_pct), d.get("credit"), session),
-            as_of=d.get("credit"),
-        ),
-    ]
     return [
         Driver(
             key="liquidity",
@@ -189,14 +163,6 @@ def build_drivers(f: MarketFeatures, inputs: dict[str, InputStatus], t: Threshol
             asks="Did chips fall by an unusual amount this session?",
             state=_state(semis),
             metrics=semis,
-        ),
-        Driver(
-            key="funding",
-            name="AI funding stress",
-            asks="Did the debt-funded AI names fall by more than chips explain, or did credit sell off?",
-            state=_state(funding),
-            metrics=funding,
-            counted=False,  # on trial: shown and logged, not in the stress label until replay scores it
         ),
     ]
 
@@ -228,11 +194,6 @@ def _evidence(driver: Driver) -> str:
             parts.append(f"a {hits['z'].value:+.1f}σ move")
     elif driver.key == "risk_off" and "chg" in hits:
         parts.append(f"VIX {hits['chg'].value:+.0f}%")
-    elif driver.key == "funding":
-        if "z" in hits and (move := next((m.value for m in driver.metrics if m.met is None), None)) is not None:
-            parts.append(f"debt-funded AI names {move:+.1f}% beyond their usual move with chips")
-        if "chg" in hits:
-            parts.append(f"high-yield bonds {hits['chg'].value:+.2f}%")
     elif driver.key == "semis":
         move = next((m.value for m in driver.metrics if m.unit == "chg" and m.value is not None), None)
         if move is not None:
@@ -299,6 +260,16 @@ def backdrop(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> str:
             parts.append(f"SOXX RSI {f.soxx_rsi:.0f}, below {t.semi_rsi_digestion:.0f}: chip momentum is weak.")
         else:
             parts.append(f"SOXX RSI {f.soxx_rsi:.0f}.")
+    if f.funding_excess_20d_pct is not None:
+        text = (
+            f"Debt-funded AI names ({', '.join(AI_LEVERAGE_TICKERS)}) are {f.funding_excess_20d_pct:+.1f} pts against "
+            f"what chips explain over the last {t.funding_window} sessions"
+        )
+        if f.funding_basket_20d_pct is not None and f.funding_soxx_20d_pct is not None:
+            text += f" ({f.funding_basket_20d_pct:+.0f}% vs SOXX {f.funding_soxx_20d_pct:+.0f}%)"
+        if f.funding_rank is not None:
+            text += f", lower than {100 - f.funding_rank:.0f}% of the past year's readings"
+        parts.append(text + ".")
     if f.effr_minus_2y_pct is not None and f.y2_pct is not None and f.effr_pct is not None:
         gap = -f.effr_minus_2y_pct
         if gap > t.cuts_2y_spread_pct:

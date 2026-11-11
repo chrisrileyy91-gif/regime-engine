@@ -36,7 +36,7 @@ def states(**overrides: object) -> dict[str, str]:
 
 
 def test_drivers_quiet_in_calm_market() -> None:
-    assert states() == {"liquidity": "QUIET", "risk_off": "QUIET", "semis": "QUIET", "funding": "QUIET"}
+    assert states() == {"liquidity": "QUIET", "risk_off": "QUIET", "semis": "QUIET"}
 
 
 def test_high_yield_level_alone_does_not_activate_liquidity() -> None:
@@ -50,12 +50,7 @@ def test_yield_jump_activates_liquidity() -> None:
 
 def test_levels_never_trigger() -> None:
     """VIX above 20 and SOXX RSI below 40 are backdrop: they describe weeks, not the session."""
-    assert states(vix=28.0, soxx_rsi=30.0) == {
-        "liquidity": "QUIET",
-        "risk_off": "QUIET",
-        "semis": "QUIET",
-        "funding": "QUIET",
-    }
+    assert states(vix=28.0, soxx_rsi=30.0) == {"liquidity": "QUIET", "risk_off": "QUIET", "semis": "QUIET"}
 
 
 def test_same_session_moves_trigger() -> None:
@@ -65,20 +60,18 @@ def test_same_session_moves_trigger() -> None:
     assert states(soxx_chg_1d_pct=2.1, soxx_return_z=1.4, soxx_rsi=39.0)["semis"] == "QUIET"  # Oct 21: an up day
 
 
-def test_funding_card_fires_on_the_basket_or_on_credit_and_is_never_counted() -> None:
-    """On trial: the debt-funded names beyond their usual move with chips, or high-yield bonds."""
-    assert states(funding_excess_z=-2.2, funding_excess_pct=-4.0)["funding"] == "ACTIVE"
-    assert states(credit_chg_1d_pct=-0.9)["funding"] == "ACTIVE"
-    assert states(funding_excess_z=None, credit_chg_1d_pct=None)["funding"] == "UNKNOWN"
-    f = features(funding_excess_z=-2.2, funding_excess_pct=-4.0)
+def test_funding_is_backdrop_not_a_driver() -> None:
+    """Its first shape, a same-day card, fired on 3 of 63 semis drops in the replay. Funding
+    pressure builds over weeks, so it is a 20-session level and lives in the backdrop."""
+    f = features(
+        funding_excess_20d_pct=-14.2, funding_rank=8.0, funding_basket_20d_pct=-22.4, funding_soxx_20d_pct=-6.1
+    )
     drivers = build_drivers(f, {})
-    card = next(d for d in drivers if d.key == "funding")
-    assert card.counted is False and all(d.counted for d in drivers if d.key != "funding")
-    s = stress(f, drivers)
-    assert s.level == "CALM" and "AI funding stress is active (shown, not counted)" in s.reasons
-    assert "debt-funded AI names -4.0% beyond their usual move with chips" in diagnose(f, drivers)
-    f = features(funding_excess_z=None, funding_excess_pct=None, credit_chg_1d_pct=None)
-    assert stress(f, build_drivers(f, {})).level == "CALM"  # an unread trial card never blocks Calm
+    assert [d.key for d in drivers] == ["liquidity", "risk_off", "semis"] and all(d.counted for d in drivers)
+    text = backdrop(f)
+    assert "Debt-funded AI names (CRWV, ORCL, NBIS) are -14.2 pts against what chips explain" in text
+    assert "(-22% vs SOXX -6%)" in text and "lower than 92% of the past year's readings" in text
+    assert "Debt-funded" not in diagnose(f, drivers) and "Debt-funded" not in backdrop(features())
 
 
 def test_a_yield_jump_counts_only_when_chips_fell_with_it() -> None:

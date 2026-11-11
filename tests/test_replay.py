@@ -50,14 +50,15 @@ def test_a_yield_jump_counts_only_when_chips_fell() -> None:
     assert abs(row.soxx_pct) < 1.5 and row.new == "CALM" and row.old != "CALM"
 
 
-def test_funding_card_is_scored_beside_the_label() -> None:
-    soxx, vix, y10 = _inputs()
-    name = soxx * 1.0
-    name.iloc[-20:] *= 0.92  # the debt-funded name drops 8% on a day chips don't
-    hyg = series([80.0] * N)
-    rows = replay(soxx, vix, y10, 60, basket=[name], credit=hyg)
-    hit = [r for r in rows if r.funding]
-    assert hit and all(r.funding is not None for r in rows) and hit[0].next_pct is not None
+def test_funding_backdrop_is_scored_on_the_next_five_sessions() -> None:
+    rng = np.random.default_rng(4)
+    n = 520
+    soxx = series(list(100.0 * np.cumprod(1 + rng.normal(0, 0.01, n))))
+    name = series(list(50.0 * np.cumprod(1 + 1.5 * soxx.pct_change().fillna(0).to_numpy() + rng.normal(0, 0.01, n))))
+    rows = replay(soxx, series([15.0] * n), series([4.0] * n), 200, basket=[name])
+    scored = [r for r in rows if r.funding_rank is not None and r.next5_pct is not None]
+    assert len(scored) > 150 and all(0 <= r.funding_rank <= 100 and 0 <= (r.next5_drops or 0) <= 5 for r in scored)
+    assert rows[-1].next5_pct is None  # the newest sessions have no next five yet
     text = render(rows)
-    assert "Funding card (shown, not counted)" in text and "the stress label read Calm" in text
-    assert "No sessions with the basket" in render(replay(soxx, vix, y10, 60))
+    assert "Funding backdrop" in text and "Bottom fifth (lagging chips)" in text and "Top fifth" in text
+    assert "No sessions with the basket" in render(replay(soxx, series([15.0] * n), series([4.0] * n), 200))

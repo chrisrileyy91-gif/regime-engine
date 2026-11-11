@@ -76,7 +76,7 @@ NEWS_SHORT = {
 
 
 def stress(f: MarketFeatures, drivers: list[Driver]) -> Stress:
-    """Counted drivers only (the funding card is on trial). A yield jump counts only when chips fell
+    """Counted drivers only. A yield jump counts only when chips fell
     with it: yields and chips have been rising together, so a jump on a flat day isn't stress."""
     core = [d for d in drivers if d.counted]
     yields = yields_counted(f, drivers)

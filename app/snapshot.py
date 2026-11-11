@@ -48,6 +48,8 @@ def history_row(status: RegimeStatus) -> dict[str, Any]:
         "vix": status.inputs.get("vix"),
         "soxx_rsi": status.inputs.get("soxx_rsi"),
         "active_drivers": [d.key for d in status.drivers if d.state == "ACTIVE"],
+        "funding_excess_20d": status.inputs.get("funding_excess_20d_pct"),
+        "funding_rank": status.inputs.get("funding_rank"),
         "data_quality": status.data_quality.status if status.data_quality else None,
     }
 

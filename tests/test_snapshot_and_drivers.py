@@ -103,7 +103,7 @@ def test_diagnosis_flags_rates_a_session_behind_stocks() -> None:
     f.dates["y10"] = "2026-10-09"
     text = diagnose(f, build_drivers(f, {}))
     assert "The official 10Y close for Tue Oct 13 isn't in yet; Fri Oct 9's isn't used for today's read." in text
-    assert "Couldn't check: liquidity drain" in text
+    assert "Couldn't check: yields jumped" in text
 
 
 def test_diagnosis_on_a_bond_holiday_says_yields_did_not_move() -> None:

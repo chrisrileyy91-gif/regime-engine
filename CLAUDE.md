@@ -148,7 +148,8 @@ software group it alone faked an acceleration on the first real read.
   +0.36 pts, total 0.992 vs 1.0 needed). `tests/fixtures/sec_filings.txt` holds that data.
 
 ## Today (daily)
-- Drivers (same-session MOVES only): 10Y +10 bps or z > 1.5 · VIX up > 10% · SOXX down > 4% or
+- Drivers (same-session MOVES only; the yield driver is named "Yields jumped", key `liquidity`. It
+  was "Liquidity drain" until Nov 11, 2026: the page reads a yield, not reserves or repo): 10Y +10 bps or z > 1.5 · VIX up > 10% · SOXX down > 4% or
   its return z < −1.5 vs the prior 60 sessions. The 4% floor exists because the z adapts after a
   rout. VIX above 20 and SOXX RSI below 40 are backdrop metrics on the driver cards, not triggers.
 - Stress: 1 active = Elevated, 2+ or VIX > 30 = Stressed; 0 active = Calm only if all three drivers
@@ -173,6 +174,8 @@ software group it alone faked an acceleration on the first real read.
      of SPY, so a semis rout drags it (Oct 14 SPY −1.1%; Sep 14 SPY −0.5%, RSP +0.1%).
   5. **rotation** (software up) / **chips** (software down) — mostly chip-specific.
   Every row carries `macro_share` and `expected_pct`, so the label is never the whole story.
+  The summary ends with the same fit on the newest window (`today.sensitivity`): SOXX per +10 bps
+  in the 10Y, per 1% in RSP, and the R². It is a description of the last 120 sessions, not a forecast.
   VIX is in the detail line only (to Nov 2026 a "fear" tag claimed days: Nov 5, SOXX −12%, VIX
   +70%, was "VIX spiked"; 6 of 8 headline/gauge disagreements were that kind). `moved` lists every
   gauge that moved, including **credit** (HYG ≤ −0.75% or z ≤ −2), which annotates and never

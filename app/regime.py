@@ -73,7 +73,7 @@ def telemetry(
                 f"or +{t.tnx_1d_spike_bps:.0f} bps in a session"
             ),
             triggered=tnx_triggered,
-            signal="LIQUIDITY DRAIN",
+            signal="RATE PRESSURE",
         ),
         TelemetrySignal(
             indicator="Vol Index (VIX)",

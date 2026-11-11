@@ -145,8 +145,8 @@ def build_drivers(f: MarketFeatures, inputs: dict[str, InputStatus], t: Threshol
     return [
         Driver(
             key="liquidity",
-            name="Liquidity drain",
-            asks="Did yields jump enough to pull money out of risk?",
+            name="Yields jumped",
+            asks="Did the 10Y yield jump this session?",
             state=_state(liquidity),
             metrics=liquidity,
         ),

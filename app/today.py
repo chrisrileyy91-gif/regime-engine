@@ -144,6 +144,27 @@ def decompose(
     return out
 
 
+def sensitivity(
+    soxx: pd.Series, market: pd.Series, y10_bps: pd.Series, t: Thresholds = THRESHOLDS
+) -> tuple[float, float, float, int] | None:
+    """How SOXX has moved with the broad market and the 10Y over the newest `decomp_window` sessions:
+    (SOXX % per 1% in the equal-weight S&P 500, SOXX % per +10 bps in the 10Y with the market held
+    fixed, share of SOXX's daily variation the two account for, sessions used). The same fit the
+    tally uses, on the latest window. None without enough history."""
+    frame = pd.concat({"soxx": soxx, "mkt": market, "dy": y10_bps}, axis=1, join="inner").dropna()
+    past = frame.iloc[-t.decomp_window :]
+    if len(past) < t.decomp_min_sessions:
+        return None
+    y = past["soxx"].to_numpy(float)
+    x = np.column_stack([np.ones(len(past)), past["mkt"].to_numpy(float), past["dy"].to_numpy(float)])
+    coef, *_ = np.linalg.lstsq(x, y, rcond=None)
+    total = float(((y - y.mean()) ** 2).sum())
+    if total == 0.0:
+        return None
+    r2 = 1.0 - float(((y - x @ coef) ** 2).sum()) / total
+    return float(coef[1]), float(coef[2]) * 10.0, r2, len(past)
+
+
 def tally(
     verified: dict[str, Verified],
     extras: dict[str, pd.Series] | None = None,
@@ -311,6 +332,7 @@ def tally(
             )
         )
     days.reverse()  # newest first
+    fit = sensitivity(soxx, mkt, y10, t) if not mkt.empty and not y10.empty else None
     final = [d for d in days if not d.provisional]
     counts = Counter(d.driver for d in final)
     shares = [d.macro_share for d in final if d.macro_share is not None]
@@ -320,7 +342,11 @@ def tally(
         news_counts=_news_counts([d for d in final if d.driver in RESIDUAL]),
         window_sessions=int((soxx.index >= drops.index[0]).sum()) if len(drops) else 0,
         avg_macro_share=None if not shares else round(sum(shares) / len(shares), 3),
-        summary=_tally_summary(days, final, counts, shares),
+        market_beta=None if fit is None else round(fit[0], 2),
+        rate_beta_10bps=None if fit is None else round(fit[1], 2),
+        fit_r2=None if fit is None else round(fit[2], 3),
+        fit_sessions=None if fit is None else fit[3],
+        summary=_tally_summary(days, final, counts, shares) + _sensitivity_text(fit),
     )
 
 
@@ -366,6 +392,17 @@ def _fmt_bps(name: str, close: float | None, spike: float | None) -> str:
     if spike is not None and spike >= 5 and (close is None or spike - close >= 5):
         text += f" (+{spike:.0f} at its high)"
     return text
+
+
+def _sensitivity_text(fit: tuple[float, float, float, int] | None) -> str:
+    if fit is None:
+        return ""
+    market, rate, r2, n = fit
+    return (
+        f" Over the last {n} sessions, a 10 bps rise in the 10Y has gone with SOXX {rate:+.1f}% (broad market held "
+        f"fixed) and a 1% move in the equal-weight S&P with SOXX {market:+.1f}%; together they account for "
+        f"{r2 * 100:.0f}% of SOXX's day-to-day variation."
+    )
 
 
 def _tally_summary(days: list[TallyDay], final: list[TallyDay], counts: Counter[str], shares: list[float]) -> str:

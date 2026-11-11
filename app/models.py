@@ -200,6 +200,10 @@ class Tally(BaseModel):
     news_counts: dict[str, int] = {}  # headline categories on the no-gauge days
     window_sessions: int = 0
     avg_macro_share: float | None = None  # mean explained share across the counted days
+    market_beta: float | None = None  # SOXX % per 1% in the equal-weight S&P 500, newest window
+    rate_beta_10bps: float | None = None  # SOXX % per +10 bps in the 10Y, market held fixed
+    fit_r2: float | None = None  # share of SOXX's daily variation the two account for
+    fit_sessions: int | None = None
     summary: str = ""
 
 
@@ -221,7 +225,7 @@ class RegimeStatus(BaseModel):
     # Fields kept from the original spec's payload (dashboard-compatible), with new meanings:
     phase: str  # the CYCLE phase from company filings (quarterly), e.g. "Buildout"
     risk_level: str  # TODAY's stress: CALM / ELEVATED / STRESSED / UNKNOWN (daily)
-    liquidity_squeeze: bool | None  # did yields jump or volatility force selling this session
+    liquidity_squeeze: bool | None  # original key, kept: did yields jump or volatility spike this session
     semi_rsi: float | None
     tnx_yield: float | None
     actionable_summary: str

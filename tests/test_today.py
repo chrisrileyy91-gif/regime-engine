@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from app.drivers import build_drivers
-from app.today import decompose, overnight, stress, tally
+from app.today import decompose, overnight, sensitivity, stress, tally
 from app.verify import verify_all
 from tests.conftest import TODAY, market, series
 from tests.test_regime import calm
@@ -189,6 +189,23 @@ def test_credit_and_the_debt_funded_names_annotate_the_day() -> None:
         -10.0, abs=0.01
     )
     assert "high-yield bonds -1.00%" in newest.detail and "debt-funded AI names -10.0%" in newest.detail
+
+
+def test_sensitivity_recovers_the_betas_and_prints_in_the_summary() -> None:
+    rng = np.random.default_rng(5)
+    mkt = series(list(rng.normal(0, 0.5, 200)))
+    dy = series(list(rng.normal(0, 3.0, 200)))
+    soxx = 1.8 * mkt - 0.05 * dy + series(list(rng.normal(0, 0.1, 200)))
+    fit = sensitivity(soxx, mkt, dy)
+    assert fit is not None
+    market, rate, r2, n = fit
+    assert market == pytest.approx(1.8, abs=0.05) and rate == pytest.approx(-0.5, abs=0.1)  # per 10 bps
+    assert r2 > 0.95 and n == 120
+    assert sensitivity(soxx.iloc[:40], mkt.iloc[:40], dy.iloc[:40]) is None
+    results, extras = _tally_inputs()
+    t = tally(verify_all(results, TODAY.date()), extras)
+    assert t.market_beta == pytest.approx(BETA, abs=0.3) and t.rate_beta_10bps is not None
+    assert "a 10 bps rise in the 10Y has gone with SOXX" in t.summary
 
 
 def test_decompose_uses_only_earlier_sessions_and_needs_history() -> None:

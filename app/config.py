@@ -22,6 +22,14 @@ class Thresholds:
     soxx_drop_floor_pct: float = -4.0  # ...or this big regardless: after a rout the z adapts (same
     # reason as oil_move_pct). Nov 6-10, 2026: a 60-day window that holds a -12% day reads -4% as mild.
     soxx_z_window: int = 60
+    # A yield jump counts toward the stress label only when chips also fell this much that session.
+    # Nov 10, 2026: 10Y +12 bps, SOXX -0.1%, and the page read Elevated; over the 120 sessions to
+    # then a 10 bps rise in the 10Y went with SOXX UP 2.1% (broad market held fixed).
+    yields_count_soxx_pct: float = -1.5
+    # Funding card (shown, not counted): the debt-funded AI names' move beyond what their usual
+    # sensitivity to SOXX predicts, as a z vs the prior 60 sessions of the same.
+    funding_excess_z: float = -1.5
+    funding_z_window: int = 60
     # Tally: share of a semis drop that the broad market and yields explain (rolling regression of
     # SOXX's daily return on the equal-weight S&P 500's return and the 10Y change, prior sessions only).
     decomp_window: int = 120

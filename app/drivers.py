@@ -142,6 +142,32 @@ def build_drivers(f: MarketFeatures, inputs: dict[str, InputStatus], t: Threshol
             as_of=d.get("soxx"),
         ),
     ]
+    funding = [
+        DriverMetric(
+            label="Debt-funded AI names, beyond their usual move with chips",
+            value=f.funding_excess_pct,
+            unit="chg",
+            trigger=None,
+            met=None,
+            as_of=d.get("funding"),
+        ),
+        DriverMetric(
+            label="How unusual that was",
+            value=f.funding_excess_z,
+            unit="z",
+            trigger=f"< {t.funding_excess_z}σ",
+            met=_same_session(_lt(f.funding_excess_z, t.funding_excess_z), d.get("funding"), session),
+            as_of=d.get("funding"),
+        ),
+        DriverMetric(
+            label="High-yield bonds (HYG) 1-session move",
+            value=f.credit_chg_1d_pct,
+            unit="chg",
+            trigger=f"< {t.credit_move_pct}%",
+            met=_same_session(_lt(f.credit_chg_1d_pct, t.credit_move_pct), d.get("credit"), session),
+            as_of=d.get("credit"),
+        ),
+    ]
     return [
         Driver(
             key="liquidity",
@@ -164,7 +190,26 @@ def build_drivers(f: MarketFeatures, inputs: dict[str, InputStatus], t: Threshol
             state=_state(semis),
             metrics=semis,
         ),
+        Driver(
+            key="funding",
+            name="AI funding stress",
+            asks="Did the debt-funded AI names fall by more than chips explain, or did credit sell off?",
+            state=_state(funding),
+            metrics=funding,
+            counted=False,  # on trial: shown and logged, not in the stress label until replay scores it
+        ),
     ]
+
+
+def yields_counted(f: MarketFeatures, drivers: list[Driver], t: Thresholds = THRESHOLDS) -> bool | None:
+    """A yield jump is stress for the AI trade only when chips fell with it. True/False once the
+    yield driver is ACTIVE and SOXX's same-session move is known; None when it can't be told."""
+    state = {d.key: d.state for d in drivers}
+    if state.get("liquidity") != "ACTIVE":
+        return False
+    if state.get("semis") == "UNKNOWN" or f.soxx_chg_1d_pct is None:
+        return None
+    return f.soxx_chg_1d_pct <= t.yields_count_soxx_pct
 
 
 def _move(pct: float) -> str:
@@ -183,6 +228,11 @@ def _evidence(driver: Driver) -> str:
             parts.append(f"a {hits['z'].value:+.1f}σ move")
     elif driver.key == "risk_off" and "chg" in hits:
         parts.append(f"VIX {hits['chg'].value:+.0f}%")
+    elif driver.key == "funding":
+        if "z" in hits and (move := next((m.value for m in driver.metrics if m.met is None), None)) is not None:
+            parts.append(f"debt-funded AI names {move:+.1f}% beyond their usual move with chips")
+        if "chg" in hits:
+            parts.append(f"high-yield bonds {hits['chg'].value:+.2f}%")
     elif driver.key == "semis":
         move = next((m.value for m in driver.metrics if m.unit == "chg" and m.value is not None), None)
         if move is not None:
@@ -202,7 +252,7 @@ def diagnose(f: MarketFeatures, drivers: list[Driver], t: Thresholds = THRESHOLD
         sentences.append(lead + ".")
 
     active = [d for d in drivers if d.state == "ACTIVE"]
-    unknown = [d for d in drivers if d.state == "UNKNOWN"]
+    unknown = [d for d in drivers if d.state == "UNKNOWN" and d.counted]
 
     if active:
         reasons = "; ".join(f"{d.name.lower()} ({ev})" if (ev := _evidence(d)) else d.name.lower() for d in active)
@@ -210,6 +260,8 @@ def diagnose(f: MarketFeatures, drivers: list[Driver], t: Thresholds = THRESHOLD
         chips_only = [d.key for d in active] == ["semis"] and not unknown
         if chips_only:
             sentences.append("Yields and volatility didn't move with it, so look at chip or AI news.")
+        if yields_counted(f, drivers, t) is False and any(d.key == "liquidity" for d in active):
+            sentences.append("Chips didn't fall with yields, so the jump isn't counted as stress.")
     elif not unknown:
         sentences.append("Nothing unusual moved this session: yields, volatility and chips were all within range.")
     if unknown:

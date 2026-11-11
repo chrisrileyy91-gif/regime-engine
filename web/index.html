@@ -328,13 +328,13 @@
     <p class="backdrop" id="backdrop" hidden></p>
     <div class="overnight" id="overnight"></div>
     <details class="more">
-      <summary>The three daily drivers</summary>
+      <summary>The daily drivers</summary>
       <div class="drivers" id="drivers"></div>
     </details>
 
     <section>
       <h2>Is it a scapegoat?</h2>
-      <p class="lede">What explains each recent semis sell-off. First the outside shocks, in order: yields (2Y, 10Y and 30Y; close or intraday), oil rising, the dollar. Then how much of the drop the broad market and yields account for at SOXX's usual sensitivity: half or more reads as the broad market, less as chip-specific. VIX is shown but never counted as a cause, because it rises when chips fall. Then the day's headlines (Benzinga, read by Claude, each label linked to its articles). When the two disagree, the day is flagged.</p>
+      <p class="lede">What explains each recent semis sell-off. First the outside shocks: oil rising, then the dollar. Then how much of the drop the broad market and the 10Y account for at SOXX's own recent sensitivity: half or more reads as yields or the broad market (whichever did more), less as chip-specific. A yield jump is listed on the day but has to earn the label that way. VIX is shown but never counted as a cause, because it rises when chips fall. The debt-funded AI names and high-yield bonds are shown on each day. Then the day's headlines (Benzinga, read by Claude, each label linked to its articles). When the two disagree, the day is flagged.</p>
       <div class="tally-bar" id="tally-bar"></div>
       <div class="tally-legend" id="tally-legend"></div>
       <p class="tally-summary" id="tally-summary"></p>
@@ -387,23 +387,23 @@
   };
   const STRESS_NOTE = {
     CALM: "Yields, volatility and chips all stayed within their usual range today.",
-    ELEVATED: "One thing moved unusually today: yields jumped, VIX spiked, or chips sold off.",
+    ELEVATED: "One thing moved unusually today: VIX spiked, chips sold off, or yields jumped as chips fell.",
     STRESSED: "Two or more moved unusually today, or VIX is above 30.",
     UNKNOWN: "Not every driver had an official close for this session.",
   };
   const TALLY = {
-    rates: ["t-rates", "Yields jumped (2Y, 10Y or 30Y)"],
+    rates: ["t-rates", "Yields explain it (half or more with the broad market)"],
     oil: ["t-oil", "Oil jumped (USO up 4%+ or 2σ)"],
     dollar: ["t-dollar", "Dollar jumped (UUP, 2σ)"],
     fear: ["t-fear", "VIX spiked (older reads only)"],
-    market: ["t-market", "Broad market and yields explain half or more"],
+    market: ["t-market", "The broad market explains it (half or more with yields)"],
     rotation: ["t-rotation", "Mostly chip-specific; money rotated into software"],
     chips: ["t-chips", "Mostly chip-specific; software fell too"],
     unknown: ["t-unknown", "Couldn't tell (a gauge was missing)"],
   };
   const tallyOf = (k) => TALLY[k] || TALLY.unknown;
   const NEWS = { company: "Company news", ai_demand: "AI-demand worries", policy: "Policy", analyst: "Analyst calls", macro_data: "Economic data", fed: "The Fed", geopolitics: "Geopolitics/oil", none_clear: "Nothing clear", unlabelled: "Not read yet" };
-  const TAG = { rates: "yields", oil: "oil", dollar: "dollar", fear: "VIX", market: "broad market", credit: "credit (high-yield bonds)", rotation: "rotation", chips: "chips alone", unknown: "unknown" };
+  const TAG = { rates: "yields jumped", oil: "oil", dollar: "dollar", fear: "VIX", market: "broad market", credit: "credit (high-yield bonds)", rotation: "rotation", chips: "chips alone", unknown: "unknown" };
   const CAT_TEXT = { yes: "Yes", starting: "Starting", mixed: "Mixed", "not yet": "Not yet", unknown: "Unknown" };
   const SCHEDULE_NY = ["06:00", "16:40"];  // mirrors meridian-clock schedule.json
   const GRACE_MINUTES = 60;
@@ -622,7 +622,7 @@
     $("drivers").innerHTML = drivers.map((d) => `
       <article class="driver card">
         <div class="driver-head">
-          <div><h3 class="driver-name">${esc(d.name)}</h3><p class="driver-asks">${esc(d.asks)}</p></div>
+          <div><h3 class="driver-name">${esc(d.name)}</h3><p class="driver-asks">${esc(d.asks)}${d.counted === false ? " On trial: shown and logged, not part of the stress label." : ""}</p></div>
           <span class="state ${esc(d.state)}">${d.state === "ACTIVE" ? "Active" : d.state === "QUIET" ? "Quiet" : "No data"}</span>
         </div>
         <ul class="metrics">${d.metrics.map((m) => `

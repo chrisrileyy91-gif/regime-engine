@@ -18,6 +18,7 @@ from app.snapshot import (
     save_sec_cache,
     write_outputs,
 )
+from app.today import stress
 from tests.sec_fixture import sec_cache
 from tests.test_regime import calm
 
@@ -35,7 +36,7 @@ def states(**overrides: object) -> dict[str, str]:
 
 
 def test_drivers_quiet_in_calm_market() -> None:
-    assert states() == {"liquidity": "QUIET", "risk_off": "QUIET", "semis": "QUIET"}
+    assert states() == {"liquidity": "QUIET", "risk_off": "QUIET", "semis": "QUIET", "funding": "QUIET"}
 
 
 def test_high_yield_level_alone_does_not_activate_liquidity() -> None:
@@ -49,7 +50,12 @@ def test_yield_jump_activates_liquidity() -> None:
 
 def test_levels_never_trigger() -> None:
     """VIX above 20 and SOXX RSI below 40 are backdrop: they describe weeks, not the session."""
-    assert states(vix=28.0, soxx_rsi=30.0) == {"liquidity": "QUIET", "risk_off": "QUIET", "semis": "QUIET"}
+    assert states(vix=28.0, soxx_rsi=30.0) == {
+        "liquidity": "QUIET",
+        "risk_off": "QUIET",
+        "semis": "QUIET",
+        "funding": "QUIET",
+    }
 
 
 def test_same_session_moves_trigger() -> None:
@@ -57,6 +63,36 @@ def test_same_session_moves_trigger() -> None:
     assert states(soxx_return_z=-2.0)["semis"] == "ACTIVE"
     assert states(soxx_chg_1d_pct=-4.5, soxx_return_z=-1.0)["semis"] == "ACTIVE"  # the floor
     assert states(soxx_chg_1d_pct=2.1, soxx_return_z=1.4, soxx_rsi=39.0)["semis"] == "QUIET"  # Oct 21: an up day
+
+
+def test_funding_card_fires_on_the_basket_or_on_credit_and_is_never_counted() -> None:
+    """On trial: the debt-funded names beyond their usual move with chips, or high-yield bonds."""
+    assert states(funding_excess_z=-2.2, funding_excess_pct=-4.0)["funding"] == "ACTIVE"
+    assert states(credit_chg_1d_pct=-0.9)["funding"] == "ACTIVE"
+    assert states(funding_excess_z=None, credit_chg_1d_pct=None)["funding"] == "UNKNOWN"
+    f = features(funding_excess_z=-2.2, funding_excess_pct=-4.0)
+    drivers = build_drivers(f, {})
+    card = next(d for d in drivers if d.key == "funding")
+    assert card.counted is False and all(d.counted for d in drivers if d.key != "funding")
+    s = stress(f, drivers)
+    assert s.level == "CALM" and "AI funding stress is active (shown, not counted)" in s.reasons
+    assert "debt-funded AI names -4.0% beyond their usual move with chips" in diagnose(f, drivers)
+    f = features(funding_excess_z=None, funding_excess_pct=None, credit_chg_1d_pct=None)
+    assert stress(f, build_drivers(f, {})).level == "CALM"  # an unread trial card never blocks Calm
+
+
+def test_a_yield_jump_counts_only_when_chips_fell_with_it() -> None:
+    """Nov 10, 2026: 10Y +12 bps, SOXX -0.1%, and the page read Elevated."""
+    f = features(tnx_chg_1d_bps=12.0, soxx_chg_1d_pct=-0.1)
+    drivers = build_drivers(f, {})
+    assert next(d for d in drivers if d.key == "liquidity").state == "ACTIVE"  # the card still says it jumped
+    s = stress(f, drivers)
+    assert s.level == "CALM" and any("not counted" in r for r in s.reasons)
+    assert "Chips didn't fall with yields" in diagnose(f, drivers)
+    f = features(tnx_chg_1d_bps=12.0, soxx_chg_1d_pct=-2.0)
+    assert stress(f, build_drivers(f, {})).level == "ELEVATED"
+    f = features(tnx_chg_1d_bps=12.0, soxx_chg_1d_pct=None, soxx_return_z=None)
+    assert stress(f, build_drivers(f, {})).level == "UNKNOWN"  # can't tell without the chip move
 
 
 def test_missing_vix_is_unknown_not_quiet() -> None:

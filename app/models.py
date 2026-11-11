@@ -70,10 +70,11 @@ class DriverMetric(BaseModel):
 
 
 class Driver(BaseModel):
-    key: str  # liquidity / risk_off / semis
+    key: str  # liquidity / risk_off / semis / funding
     name: str
     asks: str  # the plain-English question this driver answers
     state: str  # ACTIVE / QUIET / UNKNOWN
+    counted: bool = True  # False = shown on the page, never part of the stress label
     metrics: list[DriverMetric]
 
 
@@ -171,13 +172,14 @@ class Stress(BaseModel):
 class TallyDay(BaseModel):
     date: str
     soxx_pct: float
-    driver: str  # rates/oil/dollar, else market (macro explains half+), else rotation/chips; or unknown
+    driver: str  # oil/dollar, else rates or market (they explain half+), else rotation/chips; or unknown
     moved: list[str] = []  # every gauge that moved that day, credit included
     provisional: bool = False  # newest day still waiting for an official close; not counted
     macro_share: float | None = None  # 0..1: share of the drop the broad market and yields explain
     expected_pct: float | None = None  # SOXX move expected from the broad market and the 10Y that day
     credit_pct: float | None = None  # HYG
     ai_leverage_pct: float | None = None  # average move of the debt-funded AI names
+    ai_excess_pct: float | None = None  # ...beyond what their usual sensitivity to SOXX predicts
     tnx_bps: float | None = None
     tnx_spike_bps: float | None = None  # 10Y intraday high vs the prior close
     y30_bps: float | None = None

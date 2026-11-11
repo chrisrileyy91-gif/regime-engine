@@ -30,7 +30,8 @@ def test_high_yield_level_alone_is_not_stress() -> None:
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
-        ({"tnx_chg_1d_bps": 12.0}, "ELEVATED"),
+        ({"tnx_chg_1d_bps": 12.0}, "CALM"),  # chips flat: a yield jump alone isn't stress
+        ({"tnx_chg_1d_bps": 12.0, "soxx_chg_1d_pct": -2.0}, "ELEVATED"),
         ({"vix_chg_1d_pct": 14.0}, "ELEVATED"),
         ({"soxx_return_z": -2.1}, "ELEVATED"),
         ({"soxx_chg_1d_pct": -4.5}, "ELEVATED"),  # the floor: a big drop even when the z has adapted
@@ -145,12 +146,43 @@ def test_tally_classifies_each_drop_by_what_moved_that_day() -> None:
         "dollar",
         "oil",
         "oil",
-        "rates",
-        "rates",
-        "rates",
-        "rates",
+        "chips",
+        "chips",
+        "chips",
+        "chips",
     ]
-    assert t.counts == {"rates": 4, "oil": 2, "dollar": 1, "market": 1, "rotation": 1, "chips": 2}
+    # The four oldest are days yields jumped with the broad market flat. A jump no longer claims
+    # the day; it is listed, and the label goes to what explains the drop.
+    assert all("rates" in d.moved and (d.macro_share or 0) < 0.5 for d in t.days[-4:])
+    assert t.counts == {"oil": 2, "dollar": 1, "market": 1, "rotation": 1, "chips": 6}
+
+
+def test_yields_earn_the_label_when_they_explain_the_drop() -> None:
+    """When SOXX has been falling as yields rise, a yield-led drop reads "rates"; when the broad
+    market did the work, "market"."""
+    rng = np.random.default_rng(11)
+    mkt = rng.normal(0, 0.004, N)
+    dy = rng.normal(0, 0.03, N)  # daily 10Y change in points (3 bps)
+    ret = 1.5 * mkt - 0.25 * dy + rng.normal(0, 0.001, N)  # chips fall 0.25% per bp
+    mkt[-30], dy[-30], ret[-30] = 0.0, 0.14, -0.035  # yields +14 bps, chips -3.5%
+    mkt[-10], dy[-10], ret[-10] = -0.02, 0.0, -0.032  # broad market -2%, chips -3.2%
+    y10 = series(list(4.0 + np.cumsum(dy)))
+    results = market(
+        soxx=series(list(100 * np.cumprod(1 + ret))), y10=y10, igv=series([50.0] * N), vix=series([15.0] * N)
+    )
+    flat = series([80.0] * N)
+    extras = {
+        "market": series(list(150 * np.cumprod(1 + mkt))),
+        "oil": series(list(80 * np.cumprod(1 + rng.normal(0, 0.01, N)))),
+        "dollar": series(list(28 * np.cumprod(1 + rng.normal(0, 0.002, N)))),
+        "y10_high": y10 + 0.01,
+        "y30": flat,
+        "y30_high": flat,
+        "y2": flat,
+    }
+    by = {d.soxx_pct: d for d in tally(verify_all(results, TODAY.date()), extras).days}
+    assert by[-3.5].driver == "rates" and by[-3.5].macro_share is not None and by[-3.5].macro_share > 0.5
+    assert by[-3.2].driver == "market"
 
 
 def test_explained_share_separates_a_market_day_from_a_chip_day() -> None:
@@ -214,8 +246,8 @@ def test_decompose_uses_only_earlier_sessions_and_needs_history() -> None:
     dy = series(list(rng.normal(0, 3.0, 200)))
     soxx = 1.8 * mkt - 0.05 * dy + series(list(rng.normal(0, 0.1, 200)))
     soxx.iloc[-1], mkt.iloc[-1], dy.iloc[-1] = -6.0, -2.0, 0.0
-    expected, share = decompose(soxx, mkt, dy, [soxx.index[-1]])[soxx.index[-1]]
-    assert expected == pytest.approx(-3.6, abs=0.15) and share == pytest.approx(0.6, abs=0.03)
+    expected, share, rate_part = decompose(soxx, mkt, dy, [soxx.index[-1]])[soxx.index[-1]]
+    assert expected == pytest.approx(-3.6, abs=0.15) and share == pytest.approx(0.6, abs=0.03) and rate_part == 0.0
     assert decompose(soxx.iloc[:40], mkt.iloc[:40], dy.iloc[:40], [soxx.index[39]]) == {}  # under 60 sessions
 
 
@@ -223,48 +255,56 @@ def test_missing_oil_means_nothing_below_it_can_claim_the_day() -> None:
     results, extras = _tally_inputs()
     del extras["oil"]
     drivers = [d.driver for d in tally(verify_all(results, TODAY.date()), extras).days]
-    assert drivers.count("rates") == 4 and set(drivers) == {"rates", "unknown"}
+    assert set(drivers) == {"unknown"}
 
 
 def test_headlines_annotate_and_flag_disagreement_without_changing_the_gauge() -> None:
     results, extras = _tally_inputs()
     days = tally(verify_all(results, TODAY.date()), extras).days
-    chips_day, rates_day = days[0].date, days[-1].date
+    chips_day, market_day = days[0].date, next(d.date for d in days if d.driver == "market")
     news = {
         chips_day: {"category": "fed", "summary": "Fed speaker hints at another hike.", "evidence": []},
-        rates_day: {"category": "ai_demand", "summary": "Hyperscaler cuts capex guide.", "evidence": []},
+        market_day: {"category": "ai_demand", "summary": "Hyperscaler cuts capex guide.", "evidence": []},
     }
     t = tally(verify_all(results, TODAY.date()), extras, news)
-    assert t.days[0].driver == "chips" and "Headlines point to the Fed" in (t.days[0].news_flag or "")
-    assert t.days[-1].driver == "rates" and "headlines point to AI-demand worries" in (t.days[-1].news_flag or "")
-    assert t.news_counts == {"fed": 1, "unlabelled": 2}
+    flags = {d.date: d.news_flag or "" for d in t.days}
+    assert t.days[0].driver == "chips" and "Headlines point to the Fed" in flags[chips_day]
+    assert "headlines point to AI-demand worries" in flags[market_day]
+    assert t.news_counts == {"fed": 1, "unlabelled": 6}
     assert "disagree" in t.summary
 
 
-def test_intraday_yield_spike_that_reversed_counts_as_rates() -> None:
+def test_intraday_yield_spike_that_reversed_is_listed_as_a_yield_jump() -> None:
     """CPI day, Oct 14: the 10Y rose 11 bps intraday and closed down 3. Close-to-close misses it."""
     results, extras = _tally_inputs()
     day = next(
         d for d in tally(verify_all(results, TODAY.date()), extras).days if d.tnx_bps is not None and d.tnx_bps < 0
     )
-    assert day.driver == "rates" and day.tnx_spike_bps == pytest.approx(12.0, abs=0.5)
+    assert "rates" in day.moved and day.tnx_spike_bps == pytest.approx(12.0, abs=0.5)
     assert "at its high" in day.detail
 
 
-def test_without_intraday_highs_a_close_only_day_cannot_be_called_chip_specific() -> None:
+def test_without_intraday_highs_the_label_stands_and_the_gap_is_named() -> None:
+    """The highs only feed the "yields jumped" note now, so their absence can't hold a label back."""
     results, extras = _tally_inputs()
     del extras["y10_high"]
-    drivers = [d.driver for d in tally(verify_all(results, TODAY.date()), extras).days]
-    assert "chips" not in drivers and "rotation" not in drivers and "unknown" in drivers
+    days = tally(verify_all(results, TODAY.date()), extras).days
+    assert "unknown" not in {d.driver for d in days} and all("10Y intraday high" in d.detail for d in days)
 
 
 def test_newest_day_is_provisional_and_not_counted() -> None:
     results, extras = _tally_inputs(newest_drop=True)
-    extras["y30"] = extras["y30"].iloc[:-1]  # the 30Y close hasn't posted yet
-    extras["y30_high"] = extras["y30_high"].iloc[:-1]
+    extras["market"] = extras["market"].iloc[:-1]  # the equal-weight S&P close hasn't posted yet
     t = tally(verify_all(results, TODAY.date()), extras)
     assert t.days[0].provisional and t.days[0].driver == "unknown"
     assert sum(t.counts.values()) == len(t.days) - 1 and "provisional" in t.summary
+
+
+def test_a_missing_annotation_gauge_does_not_hold_the_newest_day_back() -> None:
+    results, extras = _tally_inputs(newest_drop=True)
+    extras["y2"] = extras["y2"].iloc[:-1]  # Treasury posts the 2Y in the evening
+    newest = tally(verify_all(results, TODAY.date()), extras).days[0]
+    assert not newest.provisional and newest.driver == "chips" and "missing: 2Y" in newest.detail
 
 
 def test_summary_never_claims_there_was_no_macro_news() -> None:
@@ -303,7 +343,7 @@ def test_a_failed_headline_read_is_not_shown_as_a_label() -> None:
     results, extras = _tally_inputs()
     first = tally(verify_all(results, TODAY.date()), extras).days[0].date
     t = tally(verify_all(results, TODAY.date()), extras, {first: {"failed": 1, "last_try": "x", "problem": "y"}})
-    assert t.days[0].news is None and t.news_counts == {"unlabelled": 3}
+    assert t.days[0].news is None and t.news_counts == {"unlabelled": 7}
 
 
 def test_a_session_behind_input_is_unknown_not_quiet() -> None:
@@ -313,7 +353,12 @@ def test_a_session_behind_input_is_unknown_not_quiet() -> None:
     f.dates.update({"y10": "2026-11-05", "igv": "2026-11-05", "vix": "2026-11-04"})
     f.dates.pop("soxx", None)
     drivers = build_drivers(f, {})
-    assert {d.key: d.state for d in drivers} == {"liquidity": "QUIET", "risk_off": "UNKNOWN", "semis": "UNKNOWN"}
+    assert {d.key: d.state for d in drivers} == {
+        "liquidity": "QUIET",
+        "risk_off": "UNKNOWN",
+        "semis": "UNKNOWN",
+        "funding": "QUIET",
+    }
     assert stress(f, drivers).level == "UNKNOWN"
 
 

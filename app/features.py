@@ -14,6 +14,7 @@ from app.config import THRESHOLDS, Thresholds
 from app.indicators import (
     change_bps,
     change_pct,
+    excess_returns,
     last_valid,
     latest_change_zscore,
     latest_return_zscore,
@@ -45,6 +46,9 @@ class MarketFeatures:
     ks11_sma200: float | None = None
     dollar_chg_1d_pct: float | None = None  # UUP, consolidated tape
     y2_pct: float | None = None  # Treasury 2Y (official, posts in the evening)
+    funding_excess_pct: float | None = None  # debt-funded AI names beyond their usual move with SOXX
+    funding_excess_z: float | None = None  # ...vs the prior 60 sessions of the same
+    credit_chg_1d_pct: float | None = None  # HYG
     effr_minus_2y_pct: float | None = None
     bill_3m_pct: float | None = None
     effr_pct: float | None = None
@@ -124,6 +128,25 @@ def build_features(
         f.effr_pct = last_valid(effr)
     if f.bill_3m_pct is not None and f.effr_pct is not None:
         f.effr_minus_3m_pct = f.effr_pct - f.bill_3m_pct
+    credit = extras.get("credit")
+    if credit is not None and not credit.empty:
+        f.dates["credit"] = str(credit.index[-1].date())
+        f.credit_chg_1d_pct = change_pct(credit, 1)
+    basket = [(extras[k].astype(float).pct_change() * 100.0).dropna() for k in sorted(extras) if k.startswith("lev_")]
+    basket = [b for b in basket if not b.empty]
+    if basket and soxx is not None and len(soxx) > 1:
+        excess = excess_returns(
+            pd.concat(basket, axis=1).mean(axis=1),
+            (soxx.astype(float).pct_change() * 100.0).dropna(),
+            t.decomp_window,
+            t.decomp_min_sessions,
+        )
+        if not excess.empty:
+            f.dates["funding"] = str(excess.index[-1].date())
+            f.funding_excess_pct = float(excess.iloc[-1])
+            prior = excess.iloc[-1 - t.funding_z_window : -1]
+            if len(prior) == t.funding_z_window and float(prior.std(ddof=1)) > 0:
+                f.funding_excess_z = (float(excess.iloc[-1]) - float(prior.mean())) / float(prior.std(ddof=1))
     y2 = extras.get("y2")
     if y2 is not None and not y2.empty:
         f.dates["y2"] = str(y2.index[-1].date())

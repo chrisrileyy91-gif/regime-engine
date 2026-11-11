@@ -26,30 +26,36 @@ from app.config import (
     THRESHOLDS,
     Thresholds,
 )
-from app.drivers import bond_market_closed, day_label
+from app.drivers import bond_market_closed, day_label, yields_counted
 from app.features import MarketFeatures
+from app.indicators import excess_returns
 from app.models import Driver, OvernightItem, Stress, Tally, TallyDay, Today
 from app.verify import Verified
 
 STRESS_LABELS = {"CALM": "Calm", "ELEVATED": "Elevated", "STRESSED": "Stressed", "UNKNOWN": "Unknown"}
 TALLY_LABELS = {
-    "rates": "yields jumped (2Y, 10Y or 30Y; close or intraday)",
     "oil": "oil jumped (USO up 4%+ or 2 sigma)",
     "dollar": "the dollar jumped (UUP, 2 sigma)",
-    "market": "the broad market and yields explain at least half the drop",
+    "rates": "the broad market and yields explain at least half the drop, mostly yields",
+    "market": "the broad market and yields explain at least half the drop, mostly the broad market",
     "rotation": "mostly chip-specific, and software rose: money moved from chips to software",
     "chips": "mostly chip-specific, and software fell too",
     "unknown": "couldn't tell (a gauge was missing)",
 }
-TALLY_ORDER = ("rates", "oil", "dollar", "market", "rotation", "chips", "unknown")
-# What can claim a day. VIX is not here: on a semis rout it rises BECAUSE chips fell (Nov 5, 2026:
-# SOXX -12%, VIX +70%), so it can't be the cause. Falling oil isn't here either (Nov 4: oil -8%
-# with the equal-weight S&P +1.9% was tagged an "oil shock"). Credit is listed in `moved` only.
-MACRO_DRIVERS = ("rates", "oil", "dollar", "market")
-ANNOTATIONS = ("credit",)
+TALLY_ORDER = ("oil", "dollar", "rates", "market", "rotation", "chips", "unknown")
+# What can claim a day. Oil and the dollar are outside shocks the fit doesn't see, so a jump claims
+# the day. Yields and the broad market have to EARN it: together they must explain half the drop at
+# SOXX's own recent sensitivity. To Nov 11, 2026 a 10 bps yield jump claimed the day outright; on
+# two of its four days the fit explained under a quarter of the drop, and over those 120 sessions
+# yields and chips rose together. VIX is not here (it rises BECAUSE chips fell: Nov 5, SOXX -12%,
+# VIX +70%), nor is falling oil (Nov 4: oil -8% with the equal-weight S&P +1.9%). A yield jump and
+# credit are still listed in `moved`.
+SHOCKS = ("oil", "dollar")
+LABEL_GAUGES = ("10Y close", "oil", "dollar", "equal-weight S&P", "software", "enough history for the explained share")
+MACRO_DRIVERS = ("oil", "dollar", "rates", "market")
 RESIDUAL = ("rotation", "chips")
 TALLY_SHORT = {
-    "rates": "yields jumped",
+    "rates": "yields",
     "oil": "oil jumped",
     "dollar": "dollar jump",
     "market": "broad market",
@@ -70,8 +76,12 @@ NEWS_SHORT = {
 
 
 def stress(f: MarketFeatures, drivers: list[Driver]) -> Stress:
-    active = [d for d in drivers if d.state == "ACTIVE"]
-    unknown = [d for d in drivers if d.state == "UNKNOWN"]
+    """Counted drivers only (the funding card is on trial). A yield jump counts only when chips fell
+    with it: yields and chips have been rising together, so a jump on a flat day isn't stress."""
+    core = [d for d in drivers if d.counted]
+    yields = yields_counted(f, drivers)
+    active = [d for d in core if d.state == "ACTIVE" and (d.key != "liquidity" or yields is True)]
+    unknown = [d for d in core if d.state == "UNKNOWN"]
     reasons = [d.name for d in active]
     vix_read = any(d.key == "risk_off" and d.state != "UNKNOWN" for d in drivers)  # same-session VIX only
     if vix_read and f.vix is not None and f.vix > STRESSED_VIX:
@@ -87,8 +97,13 @@ def stress(f: MarketFeatures, drivers: list[Driver]) -> Stress:
         level = "UNKNOWN"
     else:
         level = "CALM"
+    if any(d.key == "liquidity" and d.state == "ACTIVE" for d in core) and yields is False:
+        reasons.append("yields jumped, but chips didn't fall with them (not counted)")
     if unknown:
         reasons.append(f"couldn't check {', '.join(d.name.lower() for d in unknown)}")
+    watch = [d.name for d in drivers if not d.counted and d.state == "ACTIVE"]
+    if watch:
+        reasons.append(f"{', '.join(watch)} is active (shown, not counted)")
     return Stress(level=level, label=STRESS_LABELS[level], reasons=reasons)
 
 
@@ -117,8 +132,9 @@ def _at(d: dict[Any, Any], ts: Any) -> float | None:
 
 def decompose(
     soxx: pd.Series, market: pd.Series, y10_bps: pd.Series, days: list[Any], t: Thresholds = THRESHOLDS
-) -> dict[Any, tuple[float, float]]:
-    """For each day: (expected SOXX move, share of the actual move it explains, 0..1).
+) -> dict[Any, tuple[float, float, float]]:
+    """For each day: (expected SOXX move, share of the actual move it explains 0..1, the part of
+    the expected move that comes from the 10Y).
 
     Expected = what SOXX usually does when the equal-weight S&P 500 and the 10Y move as they did
     that day: an ordinary least-squares fit of SOXX's daily return on the two, over the
@@ -126,7 +142,7 @@ def decompose(
     A bond holiday counts as a 10Y change of zero. A day without enough history is left out.
     """
     frame = pd.concat({"soxx": soxx, "mkt": market, "dy": y10_bps}, axis=1, join="inner").dropna()
-    out: dict[Any, tuple[float, float]] = {}
+    out: dict[Any, tuple[float, float, float]] = {}
     for ts in days:
         move, mkt = _at(dict(soxx.items()), ts), _at(dict(market.items()), ts)
         dy = _at(dict(y10_bps.items()), ts)
@@ -140,7 +156,7 @@ def decompose(
         x = np.column_stack([np.ones(len(past)), past["mkt"].to_numpy(float), past["dy"].to_numpy(float)])
         coef, *_ = np.linalg.lstsq(x, past["soxx"].to_numpy(float), rcond=None)
         expected = float(coef[1] * mkt + coef[2] * dy)
-        out[ts] = (expected, float(min(1.0, max(0.0, expected / move))))
+        out[ts] = (expected, float(min(1.0, max(0.0, expected / move))), float(coef[2] * dy))
     return out
 
 
@@ -173,19 +189,18 @@ def tally(
 ) -> Tally:
     """Tag each recent semis drop by what explains it, checked in order:
 
-    1. rates   10Y or 30Y up >= 10 bps at the close or at its intraday high vs the prior close, an
-               unusual 10Y close move (z >= 1.5), or the 2Y up >= 10 bps. Intraday matters: on CPI
-               day (Oct 14) the 10Y rose 11 bps by mid-session and closed down 3.
-    2. oil     USO UP >= 4% or >= 2 sigma vs its prior 60 sessions. Falling oil is not a cause.
-    3. dollar  UUP up >= 2 sigma.
-    4. market  the broad market and yields explain at least half the drop (see `decompose`).
-    5. rotation / chips   mostly chip-specific (software up = rotation, down = chips alone).
+    1. oil     USO UP >= 4% or >= 2 sigma vs its prior 60 sessions. Falling oil is not a cause.
+    2. dollar  UUP up >= 2 sigma.
+    3. rates / market   the broad market and yields explain at least half the drop (`decompose`);
+               "rates" when the 10Y accounts for more of that than the broad market, else "market".
+    4. rotation / chips   mostly chip-specific (software up = rotation, down = chips alone).
 
-    VIX no longer claims a day (it rises because chips fell); it stays in the detail line. Every
-    day also carries the explained share, so a label is never the whole story. A gauge can only
-    claim a day if every gauge above it is known. Every gauge that moved is listed in `moved`,
-    including credit (HYG). Headlines (news.py) annotate each day and flag disagreement; they never
-    change the label. The newest day stays provisional until all of its official closes have posted.
+    A yield jump no longer claims a day by itself: it is listed in `moved` (10Y or 30Y up >= 10 bps
+    at the close or the intraday high, a 10Y z >= 1.5, or the 2Y up >= 10 bps), and the label has
+    to be earned through the explained share. VIX never claims a day (it rises because chips fell).
+    Credit (HYG) and the debt-funded AI names annotate. Headlines (news.py) annotate each day and
+    flag disagreement; they never change the label. The newest day stays provisional until all of
+    its official closes have posted.
     """
     extras = extras or {}
     news = news or {}
@@ -217,6 +232,11 @@ def tally(
         "credit_z": _zscores(credit, t.tally_z_window) if not credit.empty else pd.Series(dtype=float),
         "lev": pd.concat(leverage, axis=1).mean(axis=1) if leverage else pd.Series(dtype=float),
     }
+    series["lev_x"] = (
+        excess_returns(series["lev"], soxx, t.decomp_window, t.decomp_min_sessions)
+        if leverage
+        else pd.Series(dtype=float)
+    )
     maps = {k: dict(v.items()) for k, v in series.items()}
 
     drops = soxx[soxx <= TALLY_DROP_PCT].iloc[-TALLY_DAYS:]
@@ -227,7 +247,7 @@ def tally(
     days = []
     for ts, move in drops.items():
         v = {k: _at(m, ts) for k, m in maps.items()}
-        expected, share = explained.get(ts, (None, None))
+        expected, share, rate_part = explained.get(ts, (None, None, None))
         # Treasury publishes no curve on bond-market holidays (Columbus Day, Veterans Day) while
         # stocks trade. A date before Treasury's latest row with no row of its own had no 2Y move.
         y2_closed = v["y2"] is None and y2_last is not None and ts < y2_last
@@ -240,28 +260,30 @@ def tally(
             False if y2_closed else (None if v["y2"] is None else v["y2"] >= t.y2_jump_bps),
         )
         gauges = {
-            "rates": rates,
             "oil": _any_true(
                 None if v["oil_z"] is None else v["oil_z"] >= t.oil_z,
                 None if v["oil"] is None else v["oil"] >= t.oil_move_pct,
             ),
             "dollar": None if v["usd_z"] is None else v["usd_z"] >= t.dollar_z,
-            "market": None if share is None else share >= t.macro_share,
         }
         credit_moved = _any_true(
             None if v["credit_z"] is None else v["credit_z"] <= t.credit_z,
             None if v["credit"] is None else v["credit"] <= t.credit_move_pct,
         )
         driver = "unknown"
-        for key in MACRO_DRIVERS:
+        for key in SHOCKS:
             if gauges[key] is True:
                 driver = key
                 break
             if gauges[key] is None:
                 break
         else:
-            if v["igv"] is not None:
-                driver = "rotation" if v["igv"] > 0 else "chips"
+            if share is not None and expected is not None and rate_part is not None:
+                if share >= t.macro_share:
+                    # Both parts are signed like the drop when they explain it; the more negative wins.
+                    driver = "rates" if rate_part < expected - rate_part else "market"
+                elif v["igv"] is not None:
+                    driver = "rotation" if v["igv"] > 0 else "chips"
         missing = [
             name
             for name, key in (
@@ -297,13 +319,16 @@ def tally(
         if v["credit"] is not None:
             parts.append(f"high-yield bonds {v['credit']:+.2f}%")
         if v["lev"] is not None:
-            parts.append(f"debt-funded AI names {v['lev']:+.1f}%")
+            beyond = "" if v["lev_x"] is None else f" ({v['lev_x']:+.1f} beyond their usual move with chips)"
+            parts.append(f"debt-funded AI names {v['lev']:+.1f}%{beyond}")
         if missing:
             parts.append(f"missing: {', '.join(missing)}")
         date = str(pd.Timestamp(str(ts)).date())
         entry = news.get(date)
         label = entry if entry and "category" in entry else None  # failed reads carry no label
-        moved = [k for k in MACRO_DRIVERS if gauges[k] is True]
+        moved = [k for k in SHOCKS if gauges[k] is True]
+        if rates is True:
+            moved.insert(0, "rates")
         if credit_moved is True:
             moved.append("credit")
         days.append(
@@ -312,7 +337,9 @@ def tally(
                 soxx_pct=round(float(move), 2),
                 driver=driver,
                 moved=moved,
-                provisional=bool(missing) and ts == newest,
+                # Only a gauge that can change the label holds the newest day back; the evening 2Y
+                # and the intraday highs just annotate.
+                provisional=ts == newest and any(m in LABEL_GAUGES for m in missing),
                 macro_share=_r(share, 3),
                 expected_pct=_r(expected, 2),
                 tnx_bps=_r(v["y10"], 1),
@@ -325,6 +352,7 @@ def tally(
                 market_pct=_r(v["mkt"], 2),
                 credit_pct=_r(v["credit"], 2),
                 ai_leverage_pct=_r(v["lev"], 2),
+                ai_excess_pct=_r(v["lev_x"], 2),
                 igv_pct=_r(v["igv"], 2),
                 detail="; ".join(parts),
                 news=label,

@@ -106,6 +106,17 @@ def latest_return_zscore(series: pd.Series, window: int) -> float | None:
     return (float(returns.iloc[-1]) - float(baseline.mean())) / std
 
 
+def excess_returns(target: pd.Series, base: pd.Series, window: int, min_sessions: int) -> pd.Series:
+    """`target`'s daily return minus what its usual sensitivity to `base` predicts. The sensitivity
+    is the regression slope over the `window` sessions BEFORE each day (no look-ahead). A basket that
+    simply swings harder than chips nets to about zero; what is left is its own move."""
+    frame = pd.concat({"t": target.astype(float), "b": base.astype(float)}, axis=1, join="inner").dropna()
+    cov = frame["t"].rolling(window, min_periods=min_sessions).cov(frame["b"]).shift(1)
+    var = frame["b"].rolling(window, min_periods=min_sessions).var().shift(1)
+    beta = cov / var.where(var > 0)
+    return (frame["t"] - beta * frame["b"]).dropna()
+
+
 def last_valid(series: pd.Series) -> float | None:
     clean = series.dropna()
     if clean.empty:

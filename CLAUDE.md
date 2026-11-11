@@ -22,15 +22,15 @@ records a day later.
 | VIX | Cboe VIX (close final 16:15 ET) | Yahoo ^VIX ±1% | — |
 | EFFR | NY Fed (checked against its own target range) | — | — |
 | SOXX, IGV | Alpaca consolidated tape (SIP) | Yahoo ±0.3% | — |
-| DXY | ICE formula on EODHD live FX | Yahoo DX-Y.NYB ±0.25 | ECB-fix DXY ±1.0 |
 | KOSPI, Samsung | EODHD end-of-day (2–3h after close) → KRX Open API (next day) | Yahoo ±0.1% | — |
 | Company filings | SEC EDGAR XBRL companyconcept (each company's own 10-Q/10-K) | — | entity-name check per CIK |
 | Chip stock prices | Alpaca SIP quarter-end closes (earnings-vs-price catalyst only) | — | — |
-| Tally-only | Cboe TNX/TYX daily high and TYX close; Treasury 2Y; Alpaca SIP RSP, USO (oil), UUP (dollar) | — | — |
+| Official, not cross-checked | Cboe TNX/TYX daily high and TYX close; Treasury 2Y; Alpaca SIP RSP, USO (oil), UUP (dollar), HYG (credit), CRWV/ORCL/NBIS (debt-funded AI names, own request) | — | — |
 | Headlines | Benzinga via Alpaca news API (same keys), labelled by Claude from the list only | cited ids must exist | — |
 
 Statuses: **VERIFIED** (a confirming source has the same date and agrees) · **OFFICIAL**
-(official record, not yet confirmed) · **UNCONFIRMED** (vendor record nothing confirmed →
+(official record, not yet confirmed) · **FILLED** (record missing; a web search found a published
+value that matches the independent copy; usable, never counted as confirmed) · **UNCONFIRMED** (vendor record nothing confirmed →
 withheld) · **CONFLICT** (disagreement or bad print → withheld) · **MISSING**. A newer value
 from a confirming check is shown as `preliminary` and **never** used in the call. Veto-only
 checks differ in method or timing: they catch gross errors, they never confirm. A check that
@@ -60,7 +60,7 @@ value for that exact date, AND that session is over, AND this month's spend is u
 run covers every gap. CONFLICTs are never sent. Claude is never shown Yahoo's number. A filled
 value is used only if it is for the exact date, cites a URL from its own search results, and
 agrees with Yahoo within the confirming tolerance; it is then spliced onto the history and
-marked VERIFIED with the page named. Model: `claude-haiku-5-5` (falls back to
+marked FILLED with the page named (it was VERIFIED until Nov 2026, which overstated it). Model: `claude-haiku-5-5` (falls back to
 `claude-sonnet-5-5` on a 400/404), `web_search_20250305`, max 5 searches. Never let Claude be
 the only source for a number, and never send it a conflict to break.
 
@@ -74,7 +74,7 @@ the only source for a number, and never send it a conflict to break.
 ## Architecture (one direction of flow, pure core)
 `data.py` (httpx I/O, parsers) → `verify.py` (verified-or-blank) → `features.py` (named
 features) → `drivers.py` ("why semis are moving") + `today.py` (stress, tally, overnight) +
-`regime.py` (telemetry signals, Kleene helpers) — and separately `fundamentals.py` (SEC fetch,
+`regime.py` (telemetry signals, Kleene helpers) + `replay.py` (label replay, manual) — and separately `fundamentals.py` (SEC fetch,
 cached; quarters; phases; catalysts) → `service.py` (payload) → `snapshot.py` (publish job) /
 `main.py` (local FastAPI, not deployed).
 `alert.py` posts to Pheme. `config.py` is the ONLY place thresholds, sources and tolerances live.
@@ -82,8 +82,10 @@ cached; quarters; phases; catalysts) → `service.py` (payload) → `snapshot.py
 
 ## Publishing (GitHub Pages, no server)
 - meridian-clock dispatches `regime-morning.yml` (06:00 NY: finalizes the prior US session,
-  picks up the overnight Korea session) and `regime-close.yml` (16:25 NY: 16:00 closing auction,
-  16:15 VIX settle, plus the free SIP 15-minute rule). Both call `publish.yml`.
+  picks up the overnight Korea session) and `regime-close.yml` (16:40 NY: 16:00 closing auction,
+  16:15 VIX settle seen through Cboe's 15-minute-delayed feed, plus the free SIP 15-minute rule).
+  It ran at 16:25 until Nov 10, 2026, and the same-day VIX was never in (19 of 19 runs). Both call
+  `publish.yml`. `replay.yml` is manual only and publishes nothing.
 - Never add `schedule:` blocks; the clock is the only scheduler.
 - Runners are pinned to `ubuntu-24.04` (ubuntu-latest moves to 26 on Oct 19, 2026). Move the pin
   deliberately, with a test run, not by surprise.
@@ -109,8 +111,10 @@ cached; quarters; phases; catalysts) → `service.py` (payload) → `snapshot.py
 - RSI is Wilder-smoothed (TradingView `ta.rsi`), never a plain rolling mean.
 - Keep the original payload keys (`phase`, `risk_level`, `liquidity_squeeze`, `semi_rsi`,
   `tnx_yield`, `actionable_summary`). `phase` = the cycle phase; `risk_level` = today's stress.
-- Never put a slow-moving level (10Y percentile, DXY level) into the stress label or the cycle.
-  That is what kept the old page on HIGH RISK for months.
+- Never put a level (10Y percentile, VIX level, RSI) into the stress label or the cycle. The 10Y
+  level kept the first page on HIGH RISK for months; RSI < 40 then made the label "Elevated" on 24
+  of 39 reads whatever the day did. A level belongs in `backdrop`.
+- VIX never claims a tally day: it rises because chips fell. Falling oil is not a cause either.
 
 ## The cycle (from filings; precedence 3 > 1 > 2, else Between phases)
 Groups (`CYCLE_COMPANIES`): capex = MSFT, GOOGL, AMZN, META, ORCL (summed dollars); chip revenue =
@@ -129,14 +133,24 @@ software group it alone faked an acceleration on the first real read.
   each of the last two quarters, totalling ≥ 1.0 pt · at least half the companies accelerating.
   Can overlap Buildout or Digestion; when it does it is the headline and `phases_met` shows both.
 - `since` = first quarter of the current run; `confirmed` after 2 consecutive quarters.
-- Catalysts: software (from the Monetization check), chip earnings vs chip prices (TTM EPS vs
-  price, year to the latest quarter), rate cuts (3M bill vs EFFR, as before).
+- Catalysts: software ("starting" needs the median growth RATE not falling as well as a positive
+  median CHANGE; when they disagree it reads "mixed" and prints both), chip earnings vs chip prices
+  (TTM EPS vs price, year to the latest quarter), rate cuts (Treasury 2Y vs EFFR, ±0.25; the 3M
+  bill is the fallback when the 2Y is missing).
+- Shown beside the phase, never in its rules: each series through its OWN newest quarter, that
+  quarter alone vs a year earlier (a trailing year turns ~2 quarters late: chips Q2 2026 were 81%
+  trailing, 124% on the quarter), chip revenue without MU (memory pricing), and the funding gauge:
+  hyperscaler capex as a % of operating cash flow, trailing year (`ocf` series, same EDGAR API).
+  `waiting_on` names the companies whose next quarter the phase is waiting for. A cache written
+  before a series was added refetches at once instead of waiting out the 20 hours.
 - First real read (filings to Q2 2026): Buildout since Q1 2026, confirmed; Q4 2024–Q4 2025 was
   Digestion (chip revenue growth rolled over from 81% to ~50%); software "starting" (+0.64 then
   +0.36 pts, total 0.992 vs 1.0 needed). `tests/fixtures/sec_filings.txt` holds that data.
 
 ## Today (daily)
-- Drivers (same session only): 10Y +10 bps or z > 1.5 · VIX > 20 · SOXX RSI < 40.
+- Drivers (same-session MOVES only): 10Y +10 bps or z > 1.5 · VIX up > 10% · SOXX down > 4% or
+  its return z < −1.5 vs the prior 60 sessions. The 4% floor exists because the z adapts after a
+  rout. VIX above 20 and SOXX RSI below 40 are backdrop metrics on the driver cards, not triggers.
 - Stress: 1 active = Elevated, 2+ or VIX > 30 = Stressed; 0 active = Calm only if all three drivers
   were read, otherwise Unknown. The session is the newest official date among 10Y, VIX, SOXX, IGV; a
   trigger whose input is older than that is unknown (never quiet, never active, no VIX > 30
@@ -147,20 +161,29 @@ software group it alone faked an acceleration on the first real read.
   1. **rates** — 10Y or 30Y up ≥ 10 bps at the close OR at the intraday high vs the prior close, a
      10Y close z ≥ 1.5, or the Treasury 2Y up ≥ 10 bps (policy repricing: Aug 28 hike odds jumped to
      60%, 2Y +14 bps, 10Y +5). A date before Treasury's latest row with no row is a bond holiday
-     (Columbus Day): "2Y closed", not missing. Intraday is required: CPI day Oct 14 the 10Y rose 11.2 bps by its high and
-     closed −2.7; a close-to-close test misses it entirely.
-  2. **fear** — VIX close ≥ +10%.  3. **market** — equal-weight S&P 500 (RSP) ≤ −1%. Not SPY: chips
-     are a big slice of SPY, so a semis rout drags it (Oct 14 SPY −1.1%; Sep 14 SPY −0.5%, RSP +0.1%).
-  4. **rotation** (software up) / **chips** (software down) — the residual: no gauge moved.
+     (Columbus Day): "2Y closed", not missing. Intraday is required: CPI day Oct 14 the 10Y rose
+     11.2 bps by its high and closed −2.7; a close-to-close test misses it entirely.
+  2. **oil** — USO UP ≥ 4% or z ≥ +2 vs its prior 60 sessions. One-sided: Nov 4, 2026, oil −8.1%
+     with the equal-weight S&P +1.9% was tagged an "oil shock". The 4% floor exists because a 60-day
+     z adapts shocks away in a war regime (Sep 1, US strikes on Iran: USO +5.5% = 1.65σ).
+  3. **dollar** — UUP z ≥ +2.
+  4. **market** — the broad market and yields explain ≥ half the drop (`today.decompose`): an OLS
+     fit of SOXX's daily return on RSP's return and the 10Y change over the 120 sessions BEFORE the
+     day (min 60, no look-ahead, intercept left out of the estimate). Not SPY: chips are a big slice
+     of SPY, so a semis rout drags it (Oct 14 SPY −1.1%; Sep 14 SPY −0.5%, RSP +0.1%).
+  5. **rotation** (software up) / **chips** (software down) — mostly chip-specific.
+  Every row carries `macro_share` and `expected_pct`, so the label is never the whole story.
+  VIX is in the detail line only (to Nov 2026 a "fear" tag claimed days: Nov 5, SOXX −12%, VIX
+  +70%, was "VIX spiked"; 6 of 8 headline/gauge disagreements were that kind). `moved` lists every
+  gauge that moved, including **credit** (HYG ≤ −0.75% or z ≤ −2), which annotates and never
+  labels. The debt-funded AI names' average move sits beside it (`ai_leverage_pct`).
   A row is "unknown" unless every gauge that could claim it is present. The newest row is
   `provisional` (not counted) while any of its official closes are missing; 06:00 finalizes it.
   The page must never say "no macro trigger": gauges see moves, not news, policy or levels
   (Aug 18 "yields rattle markets" was the 30Y LEVEL at a 2007 high; its move was +1.7 bps).
-- Oil (USO |move| ≥ 4% OR |z| ≥ 2 vs prior 60 sessions) and dollar (UUP, z ≥ +2) sit after rates.
-  The 4% floor exists because a 60-day z adapts shocks away in a war regime (Sep 1, US strikes on
-  Iran: USO +5.5% = 1.65σ). Both fixes came from headline flags, which is what the flags are for. USO
-  and UUP are what Crude Logic (frack-around) already uses after Yahoo's CL=F broke; EIA's official
-  WTI spot posts in weekly batches, too late for same day. `moved` lists every gauge that moved.
+- USO and UUP are what Crude Logic (frack-around) already uses after Yahoo's CL=F broke; EIA's
+  official WTI spot posts in weekly batches, too late for same day. The dollar on the overnight
+  line is UUP too; the DXY input (EODHD FX, ECB veto, web-search fill) was removed in Nov 2026.
 - Headlines (`app/news.py`): for each tally day, Alpaca/Benzinga headlines tagged to NVDA, AVGO,
   AMD, MU, TSM, ASML, INTC, SOXX, SMH, SPY, QQQ from the prior 16:00 ET to that day's 16:00 ET.
   Claude (no web search) must answer through a forced `label_day` tool call (structured input; the
@@ -170,21 +193,33 @@ software group it alone faked an acceleration on the first real read.
   retried at most once a day, three times, so a broken reply can't be re-billed every run. Finished days are labelled once
   (`news_cache.json`). Headlines never change the gauge label; disagreement sets `news_flag`
   ("headlines point to the Fed, but no macro gauge moved", or the reverse). Links are http(s) only.
-- Real-data check (Oct 14, all 20 days recomputed from Cboe/Yahoo): rates 1 (+ Oct 14 provisional),
-  fear 2, market 0, rotation 7, chips 9. Spot checks: Jul 28 (China competition, financing) and
+- Real-data check under the OLD first-match rules (Oct 14, all 20 days recomputed from Cboe/Yahoo):
+  rates 1 (+ Oct 14 provisional), fear 2, market 0, rotation 7, chips 9. Not yet redone for the
+  explained-share rules. Spot checks: Jul 28 (China competition, financing) and
   Sep 14 (AI-policy worries, software +5%) were chip stories; Oct 14 was CPI.
 - Claude fills are cached (`claude_fills.json`, 30 days) and re-checked against Yahoo and vetoes
-  before reuse, so a value found at 09:50 isn't lost when the 16:25 search comes up empty.
+  before reuse, so a value found at 09:50 isn't lost when the close-run search comes up empty.
 - Alpaca daily bars dated today are dropped until 16:20 NY: a manual run at 09:50 once recorded a
   partial session as a VERIFIED close (Yahoo's bar was equally partial).
-- DXY, KOSPI and Samsung are telemetry only (`used_in_call=False`): their gaps never degrade the read.
+- KOSPI and Samsung are telemetry only (`used_in_call=False`): their gaps never degrade the read.
+- The Signals table prints the source each value actually came from this run, never a fixed name.
 
 ## Known gaps (do not paper over)
-- Thresholds are not fitted. No backtest exists yet. Correct data into an untested rule is
-  still an untested call.
-- EFFR − 3M bill is a proxy, not the futures curve. Bills can trade away from EFFR on supply alone.
-- Filings lag: a quarter is only read once the last company in a group reports (~6–8 weeks after
-  quarter end), so the cycle runs a quarter behind by design. Q4 values derived as FY − 9M
+- Thresholds are not fitted. `python -m app.replay` (workflow "Replay stress label") rebuilds the
+  old and new stress labels over history and tabulates them against SOXX's same-day move; it is a
+  description, not a fit, and the new label includes SOXX's own move by construction. The
+  explained-share threshold (0.5), the SOXX floor (−4%), the 2Y band (±0.25) and the credit
+  thresholds are judgment calls until someone fits them.
+- The explained share is a two-factor linear fit on 120 sessions: beta drifts, RSP holds some
+  chip names, and a day when yields spike intraday and reverse reads as unexplained (the rates
+  gauge catches that one). Treat it as a rough split, not a measurement to the point.
+- The funding gauge reads capex vs operating cash flow only. Debt issuance is not read: filings
+  omit quarters with no issuance, so a gap can't be told from a zero. Leases and off-balance-sheet
+  financing (the CoreWeave-style deals the headlines are about) are invisible to it.
+- 2Y − EFFR is a proxy, not the futures curve: the 2Y carries a term premium, and Treasury posts
+  it in the evening, so the close read uses the prior day's 2Y.
+- Filings lag: a quarter is only read once the last company in every group reports. With AVGO's
+  October year-end that is ~10–11 weeks after quarter end (Q3 lands mid-December), so the cycle runs a quarter behind by design. Q4 values derived as FY − 9M
   include year-end adjustments; Q4 EPS derived this way is approximate (share counts differ).
 - Old EPS facts are not split-adjusted unless a later filing restated them; the earnings catalyst
   only uses the latest two years, which are post-split for NVDA and AVGO. Watch for new splits.
@@ -194,12 +229,11 @@ software group it alone faked an acceleration on the first real read.
 - USO tracks front-month WTI futures (roll effects), not spot; UUP tracks the dollar-index futures.
   Both are proxies, chosen because they print same-day on the consolidated tape.
 - EFFR is published the next morning and changes only at FOMC decisions. On a decision day the
-  16:25 read still carries the pre-decision EFFR.
-- DXY is computed from FX quotes (EODHD free plan: 15-minute delay) with ICE's formula and must
-  agree with ICE's own value (Yahoo) to be used.
+  close read still carries the pre-decision EFFR.
 - Korea at 06:00 depends on EODHD posting within ~3.5h of the 02:30 ET close; if it hasn't, the
   prior session is used and the newer Yahoo value shows as preliminary.
-- EODHD is optional. Without it, Korea and the dollar index are filled by Claude every run
-  (history then comes from Yahoo, labelled unconfirmed) at roughly $0.02–0.05 per run on Haiku.
+- EODHD and KRX keys are optional and were not set as of Nov 2026. Without them Korea is filled
+  by Claude every run and shown as FILLED; its history (Samsung RSI, KOSPI SMA200) then comes from
+  Yahoo. A free KRX Open API key (`KRX_API_KEY`) makes both official.
 - A Claude fill is a second independent source, not an official record. If Yahoo is also down,
   the gap stays open.

@@ -1,14 +1,17 @@
 """The "why are semis moving?" layer.
 
-Three drivers, each answering one question with official data:
-  liquidity  — did yields jump?                    (10Y 1-session change, and how unusual it was)
-  risk_off   — is volatility forcing de-risking?   (VIX level)
-  semis      — has chip momentum broken?           (SOXX RSI)
+Three drivers, each answering one question with official data, each a same-session MOVE:
+  liquidity  — did yields jump?           (10Y 1-session change, and how unusual it was)
+  risk_off   — did volatility spike?      (VIX 1-session change)
+  semis      — did chips sell off?        (SOXX 1-session return, and how unusual it was)
 
 Rule learned from the first live read: a one-day move can only be explained by something
-that also moved that day. Levels (10Y at 5.2%, where bills sit vs fed funds) go in the
-separate `backdrop` sentence, never in the diagnosis. Every value carries its date, and
-when the rates data is a session behind the stock data, the diagnosis says so.
+that also moved that day. Levels (10Y at 5.2%, VIX above 20, SOXX RSI below 40, where bills sit
+vs fed funds) go in the separate `backdrop` sentence, never in the diagnosis or the stress label.
+Until Nov 2026 the VIX level and the RSI level were drivers; across 39 scheduled reads every
+non-Calm label had RSI < 40 active, so the label tracked a 14-session reading, not the day.
+Every value carries its date, and when the rates data is a session behind the stock data, the
+diagnosis says so.
 """
 
 from __future__ import annotations
@@ -95,35 +98,48 @@ def build_drivers(f: MarketFeatures, inputs: dict[str, InputStatus], t: Threshol
     ]
     risk_off = [
         DriverMetric(
-            label="VIX",
-            value=f.vix,
-            unit="pts",
-            trigger=f"> {t.vix_level:.0f}",
-            met=_same_session(_gt(f.vix, t.vix_level), d.get("vix"), session),
+            label="VIX 1-session change",
+            value=f.vix_chg_1d_pct,
+            unit="chg",
+            trigger=f"> +{t.vix_jump_pct:.0f}%",
+            met=_same_session(_gt(f.vix_chg_1d_pct, t.vix_jump_pct), d.get("vix"), session),
             as_of=d.get("vix"),
-            preliminary=prelim.get("vix"),
         ),
         DriverMetric(
-            label="VIX 1-session change", value=f.vix_chg_1d_pct, unit="chg", trigger=None, met=None, as_of=d.get("vix")
+            label="VIX (backdrop)",
+            value=f.vix,
+            unit="pts",
+            trigger=None,
+            met=None,
+            as_of=d.get("vix"),
+            preliminary=prelim.get("vix"),
         ),
     ]
     semis = [
         DriverMetric(
-            label="SOXX RSI(14)",
-            value=f.soxx_rsi,
-            unit="",
-            trigger=f"< {t.semi_rsi_digestion:.0f}",
-            met=_same_session(_lt(f.soxx_rsi, t.semi_rsi_digestion), d.get("soxx"), session),
-            as_of=d.get("soxx"),
-        ),
-        DriverMetric(
             label="SOXX 1-session move",
             value=f.soxx_chg_1d_pct,
             unit="chg",
+            trigger=f"< {t.soxx_drop_floor_pct:.0f}%",
+            met=_same_session(_lt(f.soxx_chg_1d_pct, t.soxx_drop_floor_pct), d.get("soxx"), session),
+            as_of=d.get("soxx"),
+            preliminary=prelim.get("soxx"),
+        ),
+        DriverMetric(
+            label="How unusual that move was",
+            value=f.soxx_return_z,
+            unit="z",
+            trigger=f"< {t.soxx_drop_z}σ",
+            met=_same_session(_lt(f.soxx_return_z, t.soxx_drop_z), d.get("soxx"), session),
+            as_of=d.get("soxx"),
+        ),
+        DriverMetric(
+            label="SOXX RSI(14) (backdrop)",
+            value=f.soxx_rsi,
+            unit="",
             trigger=None,
             met=None,
             as_of=d.get("soxx"),
-            preliminary=prelim.get("soxx"),
         ),
     ]
     return [
@@ -136,15 +152,15 @@ def build_drivers(f: MarketFeatures, inputs: dict[str, InputStatus], t: Threshol
         ),
         Driver(
             key="risk_off",
-            name="Algorithmic risk-off",
-            asks="Is volatility forcing systematic selling?",
+            name="Volatility spike",
+            asks="Did volatility jump this session?",
             state=_state(risk_off),
             metrics=risk_off,
         ),
         Driver(
             key="semis",
-            name="Semi momentum breakdown",
-            asks="Has chip momentum itself broken?",
+            name="Semis sell-off",
+            asks="Did chips fall by an unusual amount this session?",
             state=_state(semis),
             metrics=semis,
         ),
@@ -159,18 +175,21 @@ def _move(pct: float) -> str:
 
 def _evidence(driver: Driver) -> str:
     hits = {m.unit: m for m in driver.metrics if m.met is True and m.value is not None}
+    parts = []
     if driver.key == "liquidity":
-        parts = []
         if "bps" in hits:
             parts.append(f"10Y {hits['bps'].value:+.0f} bps on {day_label(hits['bps'].as_of)}")
         if "z" in hits:
             parts.append(f"a {hits['z'].value:+.1f}σ move")
-        return ", ".join(parts)
-    if driver.key == "risk_off" and "pts" in hits:
-        return f"VIX {hits['pts'].value:.1f}"
-    if driver.key == "semis" and "" in hits:
-        return f"SOXX RSI {hits[''].value:.0f}"
-    return ""
+    elif driver.key == "risk_off" and "chg" in hits:
+        parts.append(f"VIX {hits['chg'].value:+.0f}%")
+    elif driver.key == "semis":
+        move = next((m.value for m in driver.metrics if m.unit == "chg" and m.value is not None), None)
+        if move is not None:
+            parts.append(f"SOXX {move:+.1f}%")
+        if "z" in hits:
+            parts.append(f"a {hits['z'].value:+.1f}σ move")
+    return ", ".join(parts)
 
 
 def diagnose(f: MarketFeatures, drivers: list[Driver], t: Thresholds = THRESHOLDS) -> str:
@@ -185,28 +204,14 @@ def diagnose(f: MarketFeatures, drivers: list[Driver], t: Thresholds = THRESHOLD
     active = [d for d in drivers if d.state == "ACTIVE"]
     unknown = [d for d in drivers if d.state == "UNKNOWN"]
 
-    # RSI below the line is a 14-session reading, not something that moved today. On an up day it
-    # can't explain the move (Oct 21: SOXX +2.1% with RSI 39 was listed as a "breakdown"), so say
-    # momentum is still weak and today's gain pushed against it, instead of calling it a driver.
-    weak_momentum = None
-    if f.soxx_chg_1d_pct is not None and f.soxx_chg_1d_pct >= 0.1:
-        weak_momentum = next((d for d in active if d.key == "semis"), None)
-        active = [d for d in active if d is not weak_momentum]
-    if weak_momentum is not None:
-        ev = _evidence(weak_momentum)
-        reading = f" ({ev}, below {t.semi_rsi_digestion:.0f})" if ev else ""
-        sentences.append(
-            f"Chip momentum is still weak{reading}; today's gain was a bounce against it, not a breakdown."
-        )
-
     if active:
         reasons = "; ".join(f"{d.name.lower()} ({ev})" if (ev := _evidence(d)) else d.name.lower() for d in active)
-        sentences.append(f"Same-session drivers: {reasons}.")
-    elif not unknown and weak_momentum is None:
-        sentences.append(
-            "None of the three drivers fired, so the move isn't explained by yields, volatility or chip "
-            "momentum. Look at company or sector news."
-        )
+        sentences.append(f"Moved this session: {reasons}.")
+        chips_only = [d.key for d in active] == ["semis"] and not unknown
+        if chips_only:
+            sentences.append("Yields and volatility didn't move with it, so look at chip or AI news.")
+    elif not unknown:
+        sentences.append("Nothing unusual moved this session: yields, volatility and chips were all within range.")
     if unknown:
         sentences.append(
             f"Couldn't check: {', '.join(d.name.lower() for d in unknown)} (no official close for this session)."
@@ -234,7 +239,24 @@ def backdrop(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> str:
         if f.tnx_pctile is not None:
             text += f", higher than {f.tnx_pctile:.0f}% of the past year"
         parts.append(text + ".")
-    if f.effr_minus_3m_pct is not None and f.bill_3m_pct is not None and f.effr_pct is not None:
+    if f.vix is not None:
+        level = "above" if f.vix > t.vix_level else "below"
+        parts.append(f"VIX at {f.vix:.1f} ({day_label(f.dates.get('vix'))}), {level} {t.vix_level:.0f}.")
+    if f.soxx_rsi is not None:
+        if f.soxx_rsi < t.semi_rsi_digestion:
+            parts.append(f"SOXX RSI {f.soxx_rsi:.0f}, below {t.semi_rsi_digestion:.0f}: chip momentum is weak.")
+        else:
+            parts.append(f"SOXX RSI {f.soxx_rsi:.0f}.")
+    if f.effr_minus_2y_pct is not None and f.y2_pct is not None and f.effr_pct is not None:
+        gap = -f.effr_minus_2y_pct
+        if gap > t.cuts_2y_spread_pct:
+            lean = "which points to hikes, not cuts"
+        elif gap < -t.cuts_2y_spread_pct:
+            lean = "which points to cuts"
+        else:
+            lean = "so no clear move is priced"
+        parts.append(f"2Y at {f.y2_pct:.2f}% vs fed funds {f.effr_pct:.2f}%, {lean}.")
+    elif f.effr_minus_3m_pct is not None and f.bill_3m_pct is not None and f.effr_pct is not None:
         gap = -f.effr_minus_3m_pct
         if gap > t.cuts_priced_spread_pct:
             lean = "which points to hikes, not cuts"

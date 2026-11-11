@@ -94,6 +94,18 @@ def latest_change_zscore(series: pd.Series, window: int) -> float | None:
     return (today - mean) / std
 
 
+def latest_return_zscore(series: pd.Series, window: int) -> float | None:
+    """z of today's 1-session percent return vs the `window` returns before it (today excluded)."""
+    returns = (series.astype(float).pct_change() * 100.0).dropna()
+    if len(returns) < window + 1:
+        return None
+    baseline = returns.iloc[-1 - window : -1]
+    std = float(baseline.std(ddof=1))
+    if std == 0.0 or math.isnan(std):
+        return None
+    return (float(returns.iloc[-1]) - float(baseline.mean())) / std
+
+
 def last_valid(series: pd.Series) -> float | None:
     clean = series.dropna()
     if clean.empty:

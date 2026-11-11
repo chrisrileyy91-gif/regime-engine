@@ -84,16 +84,10 @@ def test_disagreement_with_nothing_confirming_is_conflict() -> None:
 
 def test_vendor_record_without_confirmation_is_withheld() -> None:
     results = market()
-    results["dxy@yahoo"] = failed("dxy@yahoo")
-    v = check(results, "dxy")
+    results["kospi@yahoo"] = failed("kospi@yahoo")
+    results["kospi@krx"] = failed("kospi@krx")
+    v = check(results, "kospi")
     assert v.status.status == "UNCONFIRMED" and v.series is None
-
-
-def test_ecb_vetoes_gross_dxy_error() -> None:
-    results = market()
-    results["dxy@yahoo"] = failed("dxy@yahoo")
-    results["dxy@eodhd"] = ok("dxy@eodhd", results["dxy@eodhd"].series * 1.05)  # type: ignore[operator]
-    assert check(results, "dxy").status.status == "CONFLICT"
 
 
 def test_korea_eodhd_newer_than_krx_history_matches() -> None:
@@ -151,11 +145,11 @@ def test_every_input_has_a_record_source(key: str) -> None:
 
 
 def test_telemetry_gaps_are_info_not_warnings() -> None:
-    """The banner listed DXY/KOSPI/Samsung (optional keys unset) as warnings on every run."""
+    """The banner listed KOSPI/Samsung (optional keys unset) as warnings on every run."""
     from app.verify import assess
 
     results = market()
-    for key in [k for k in results if k.startswith(("kospi@", "samsung@", "dxy@"))]:
+    for key in [k for k in results if k.startswith(("kospi@", "samsung@"))]:
         results[key] = failed(key, "not configured")
     quality = assess(verify_all(results, TODAY.date()))
     assert quality.status == "OK"

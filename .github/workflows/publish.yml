@@ -1,6 +1,6 @@
 # Run the regime engine once and publish the phone page to GitHub Pages.
 #
-# Called by regime-morning.yml (06:00 NY) and regime-close.yml (16:25 NY), which meridian-clock
+# Called by regime-morning.yml (06:00 NY) and regime-close.yml (16:40 NY), which meridian-clock
 # dispatches on weekdays. Two caller files exist because the clock fires each workflow file at
 # most once per NY day ("any run today means skip"). Can also be run by hand from Actions.
 #

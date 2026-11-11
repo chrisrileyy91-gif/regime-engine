@@ -40,7 +40,17 @@ def _all(conditions: list[Condition]) -> bool | None:
     return None
 
 
-def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySignal]:
+def telemetry(
+    f: MarketFeatures, sources: dict[str, str | None] | None = None, t: Thresholds = THRESHOLDS
+) -> list[TelemetrySignal]:
+    """Context signals. `sources` is the source each input actually came from this run (verify.py
+    or a Claude fill); the table used to print fixed names ("Korea Exchange", "U.S. Treasury")
+    whatever the real source was."""
+    src = sources or {}
+
+    def source(key: str) -> str:
+        return src.get(key) or "unavailable"
+
     tnx_level = _gt(f.tnx_pctile, t.tnx_pctile_high)
     tnx_spike = _gt(f.tnx_chg_1d_bps, t.tnx_1d_spike_bps)
     tnx_triggered = _any(
@@ -52,10 +62,11 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
     ks11_above = None
     if f.ks11 is not None and f.ks11_sma200 is not None:
         ks11_above = f.ks11 > f.ks11_sma200
+    both = sorted({source("igv"), source("soxx")})
     return [
         TelemetrySignal(
             indicator="10Y Treasury Yield",
-            source="U.S. Treasury",
+            source=source("y10"),
             value=f.tnx_pct,
             trigger=(
                 f"above the {t.tnx_pctile_high:.0f}th percentile of its past year, "
@@ -66,7 +77,7 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
         ),
         TelemetrySignal(
             indicator="Vol Index (VIX)",
-            source="Cboe",
+            source=source("vix"),
             value=f.vix,
             trigger=f"> {t.vix_level}",
             triggered=_gt(f.vix, t.vix_level),
@@ -74,7 +85,7 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
         ),
         TelemetrySignal(
             indicator="Semi Momentum (SOXX RSI14)",
-            source="consolidated tape",
+            source=source("soxx"),
             value=f.soxx_rsi,
             trigger=f"< {t.semi_rsi_digestion}",
             triggered=_lt(f.soxx_rsi, t.semi_rsi_digestion),
@@ -82,7 +93,7 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
         ),
         TelemetrySignal(
             indicator="Semi Momentum (Samsung RSI14)",
-            source="Korea Exchange",
+            source=source("samsung"),
             value=f.samsung_rsi,
             trigger=f"< {t.semi_rsi_digestion}",
             triggered=_lt(f.samsung_rsi, t.semi_rsi_digestion),
@@ -90,7 +101,7 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
         ),
         TelemetrySignal(
             indicator="Software vs Hardware (IGV/SOXX)",
-            source="consolidated tape",
+            source=" and ".join(both),
             value=f.igv_soxx_ratio,
             trigger=f"SMA{t.ratio_sma_window} rising over {t.ratio_slope_lookback} sessions",
             triggered=f.ratio_sma_rising,
@@ -99,19 +110,11 @@ def telemetry(f: MarketFeatures, t: Thresholds = THRESHOLDS) -> list[TelemetrySi
         ),
         TelemetrySignal(
             indicator="Korean Equity Pulse (KOSPI)",
-            source="Korea Exchange",
+            source=source("kospi"),
             value=f.ks11,
             trigger=f"close above SMA{t.ks11_sma_window}",
             triggered=ks11_above,
             signal="EMERGING MARKET RE-RATE",
             tone="constructive",
-        ),
-        TelemetrySignal(
-            indicator="US Dollar Index",
-            source="ECB rates, ICE formula",
-            value=f.dxy,
-            trigger=f"> {t.dxy_compression}",
-            triggered=_gt(f.dxy, t.dxy_compression),
-            signal="FOREIGN REVENUE COMPRESSION",
         ),
     ]

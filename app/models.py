@@ -41,7 +41,7 @@ class InputStatus(BaseModel):
 
     key: str
     label: str
-    status: str  # VERIFIED / OFFICIAL / CONFLICT / MISSING
+    status: str  # VERIFIED / OFFICIAL / FILLED (web search matched an independent copy) / CONFLICT / MISSING
     value: float | None
     date: str | None
     source: str | None  # official source actually used
@@ -110,15 +110,19 @@ class CycleMetric(BaseModel):
     key: str
     label: str
     members: list[str]
-    latest: float | None  # group TTM growth, year over year (%)
+    latest: float | None  # value at the quarter the PHASE reads (every group reported)
     previous: float | None
+    kind: str = "growth"  # "growth" = TTM year-over-year %, "level" = a ratio in %
+    through: str | None = None  # this series' own newest quarter (can be ahead of the phase)
+    newest: float | None = None  # value at `through`
+    single_quarter: float | None = None  # that quarter alone vs a year earlier (%), growth series only
     history: list[QuarterValue] = []
 
 
 class Catalyst(BaseModel):
     key: str
     label: str
-    status: str  # yes / starting / not yet / unknown
+    status: str  # yes / starting / mixed / not yet / unknown
     detail: str
     news: dict[str, Any] | None = None  # {category, summary, evidence[{headline, url, time}], confidence}
     news_flag: str | None = None  # headlines and gauges disagree
@@ -152,6 +156,7 @@ class Cycle(BaseModel):
     catalysts: list[Catalyst] = []
     filings: list[CompanyFiling] = []
     fetched_at: str | None = None
+    waiting_on: list[str] = []  # companies whose next quarter the phase is waiting for
     notes: list[str] = []
 
 
@@ -166,9 +171,13 @@ class Stress(BaseModel):
 class TallyDay(BaseModel):
     date: str
     soxx_pct: float
-    driver: str  # first gauge that moved: rates/oil/dollar/fear/market; else rotation/chips; or unknown
-    moved: list[str] = []  # every macro gauge that moved that day
+    driver: str  # rates/oil/dollar, else market (macro explains half+), else rotation/chips; or unknown
+    moved: list[str] = []  # every gauge that moved that day, credit included
     provisional: bool = False  # newest day still waiting for an official close; not counted
+    macro_share: float | None = None  # 0..1: share of the drop the broad market and yields explain
+    expected_pct: float | None = None  # SOXX move expected from the broad market and the 10Y that day
+    credit_pct: float | None = None  # HYG
+    ai_leverage_pct: float | None = None  # average move of the debt-funded AI names
     tnx_bps: float | None = None
     tnx_spike_bps: float | None = None  # 10Y intraday high vs the prior close
     y30_bps: float | None = None
@@ -190,6 +199,7 @@ class Tally(BaseModel):
     counts: dict[str, int] = {}
     news_counts: dict[str, int] = {}  # headline categories on the no-gauge days
     window_sessions: int = 0
+    avg_macro_share: float | None = None  # mean explained share across the counted days
     summary: str = ""
 
 

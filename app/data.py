@@ -4,11 +4,11 @@ Every request goes through httpx with retries. Each source is fetched and parsed
 one failing source never takes down another. Results are keyed "<input>@<source>" (see
 config.INPUTS); verify.py decides what is trustworthy.
 
-Same-day sources, so the 16:25 read is not a session behind:
+Same-day sources, so the close read is not a session behind:
   Cboe (10Y TNX, 3M IRX, VIX: history + delayed quote whose close is official after the
   session) · Alpaca consolidated tape (SOXX, IGV) · NY Fed (EFFR) · EODHD (KOSPI and
-  Samsung end-of-day, posted 2-3h after the Korean close; live FX for the dollar index)
-Lagging cross-checks: U.S. Treasury par curve, ECB reference rates, KRX Open API.
+  Samsung end-of-day, posted 2-3h after the Korean close)
+Lagging cross-checks: U.S. Treasury par curve, KRX Open API.
 Same-day cross-check: Yahoo.
 """
 
@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import io
 import os
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -29,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from app.config import (
+    AI_LEVERAGE_TICKERS,
     ALPACA_BARS_URL,
     ALPACA_CORPORATE_ACTIONS_URLS,
     ALPACA_SIP_MIN_AGE_MINUTES,
@@ -38,15 +38,9 @@ from app.config import (
     CBOE_TALLY,
     CBOE_VIX_CSV_URL,
     CYCLE_PRICE_TICKERS,
-    DXY_CONSTANT,
-    DXY_WEIGHTS,
-    ECB_90D_URL,
-    ECB_DAILY_URL,
     EODHD_EOD_SYMBOLS,
     EODHD_EOD_URL,
-    EODHD_FX,
     EODHD_HISTORY_DAYS,
-    EODHD_LIVE_URL,
     HISTORY_YEARS,
     HTTP_ATTEMPTS,
     HTTP_BACKOFF_SECONDS,
@@ -68,7 +62,6 @@ from app.config import (
 
 NY = ZoneInfo("America/New_York")
 RETRY_STATUS = {429, 500, 502, 503, 504}
-ECB_NS = {"e": "http://www.ecb.int/vocabulary/2002-08-01/eurofxref"}
 KrxCache = dict[str, dict[str, float | None]]  # input -> {YYYYMMDD: close or None (no session)}
 
 
@@ -237,25 +230,6 @@ def parse_eodhd_eod(rows: list[dict[str, Any]]) -> pd.Series:
     return _clean(pd.Series(values.to_numpy(dtype=float), index=index))
 
 
-def parse_eodhd_dxy(payload: Any) -> tuple[pd.Timestamp, float]:
-    """DXY from EODHD live FX quotes with ICE's formula, dated by the oldest quote (New York)."""
-    rows = payload if isinstance(payload, list) else [payload]
-    by_code = {str(r.get("code", "")).upper(): r for r in rows if isinstance(r, dict)}
-    value, stamps = DXY_CONSTANT, []
-    for pair, code in EODHD_FX.items():
-        row = by_code.get(code)
-        price = row.get("close") if row else None
-        if not isinstance(price, (int, float)) or price <= 0:
-            raise DataError(f"EODHD has no usable quote for {code}")
-        value *= float(price) ** DXY_WEIGHTS[pair]
-        assert row is not None
-        stamps.append(int(row.get("timestamp") or 0))
-    if min(stamps) <= 0:
-        raise DataError("EODHD FX quote missing a timestamp")
-    oldest = pd.Timestamp(min(stamps), unit="s", tz="UTC").tz_convert(NY)
-    return pd.Timestamp(oldest.date()), value
-
-
 def parse_treasury_csv(texts: list[str]) -> dict[str, pd.Series]:
     frames = [pd.read_csv(io.StringIO(t)) for t in texts if t.strip()]
     if not frames:
@@ -296,33 +270,6 @@ def parse_nyfed_effr(payload: dict[str, Any]) -> pd.Series:
         raise DataError(f"EFFR {rate} is inconsistent with the target range {low}-{high}")
     index = pd.to_datetime([r["effectiveDate"] for r in rows])
     return _clean(pd.Series([float(r["percentRate"]) for r in rows], index=index))
-
-
-def parse_ecb_dxy(xml_texts: list[str]) -> pd.Series:
-    """DXY by ECB reference date, computed with ICE's published formula."""
-    by_date: dict[str, float] = {}
-    for text in xml_texts:
-        root = ET.fromstring(text)
-        for day in root.iterfind(".//e:Cube[@time]", ECB_NS):
-            rates = {c.get("currency"): float(c.get("rate", "nan")) for c in day.iterfind("e:Cube", ECB_NS)}
-            if not all(k in rates for k in ("USD", "JPY", "GBP", "CAD", "SEK", "CHF")):
-                continue
-            eur = rates["USD"]  # USD per EUR
-            pairs = {
-                "EURUSD": eur,
-                "USDJPY": rates["JPY"] / eur,
-                "GBPUSD": eur / rates["GBP"],
-                "USDCAD": rates["CAD"] / eur,
-                "USDSEK": rates["SEK"] / eur,
-                "USDCHF": rates["CHF"] / eur,
-            }
-            value = DXY_CONSTANT
-            for pair, weight in DXY_WEIGHTS.items():
-                value *= pairs[pair] ** weight
-            by_date[str(day.get("time"))] = value
-    if not by_date:
-        raise DataError("ECB XML had no complete rate sets")
-    return _clean(pd.Series(list(by_date.values()), index=pd.to_datetime(list(by_date))))
 
 
 def parse_alpaca_bars(pages: list[dict[str, Any]], symbol: str) -> pd.Series:
@@ -466,7 +413,7 @@ async def fetch_cboe_tally(client: httpx.AsyncClient) -> list[FetchResult]:
 
 async def fetch_eodhd(client: httpx.AsyncClient) -> list[FetchResult]:
     token = os.environ.get("EODHD_API_KEY")
-    keys = [*EODHD_EOD_SYMBOLS, "dxy@eodhd"]
+    keys = [*EODHD_EOD_SYMBOLS]
     if not token:
         return [FetchResult(k, k, "eodhd", None, "not configured (EODHD_API_KEY)") for k in keys]
     out: list[FetchResult] = []
@@ -479,17 +426,6 @@ async def fetch_eodhd(client: httpx.AsyncClient) -> list[FetchResult]:
             out.append(FetchResult(key, symbol, "eodhd", parse_eodhd_eod(response.json())))
         except Exception as exc:
             out.append(FetchResult(key, symbol, "eodhd", None, _error(exc)))
-    codes = list(EODHD_FX.values())
-    try:
-        response = await get_with_retry(
-            client,
-            EODHD_LIVE_URL.format(symbol=codes[0]),
-            params={"api_token": token, "fmt": "json", "s": ",".join(codes[1:])},
-        )
-        day, value = parse_eodhd_dxy(response.json())
-        out.append(FetchResult("dxy@eodhd", "DXY (ICE formula, live FX)", "eodhd", pd.Series([value], index=[day])))
-    except Exception as exc:
-        out.append(FetchResult("dxy@eodhd", "DXY (ICE formula, live FX)", "eodhd", None, _error(exc)))
     return out
 
 
@@ -501,17 +437,19 @@ async def fetch_nyfed(client: httpx.AsyncClient) -> FetchResult:
         return FetchResult("effr@nyfed", "EFFR", "nyfed", None, _error(exc))
 
 
-async def fetch_ecb(client: httpx.AsyncClient) -> FetchResult:
-    try:
-        texts = [(await get_with_retry(client, url)).text for url in (ECB_90D_URL, ECB_DAILY_URL)]
-        return FetchResult("dxy@ecb", "DXY (ECB-computed)", "ecb", parse_ecb_dxy(texts))
-    except Exception as exc:
-        return FetchResult("dxy@ecb", "DXY (ECB-computed)", "ecb", None, _error(exc))
-
-
 async def fetch_alpaca(client: httpx.AsyncClient) -> list[FetchResult]:
     targets = {"soxx@alpaca": "SOXX", "igv@alpaca": "IGV"}
     targets.update({f"{t.lower()}@alpaca": t for t in (*CYCLE_PRICE_TICKERS, *TALLY_TICKERS.values())})
+    return await _fetch_alpaca_bars(client, targets)
+
+
+async def fetch_alpaca_leverage(client: httpx.AsyncClient) -> list[FetchResult]:
+    """The debt-funded AI names, in a request of their own: a symbol Alpaca rejects (a delisting,
+    a rename) must never take SOXX and IGV down with it."""
+    return await _fetch_alpaca_bars(client, {f"{t.lower()}@alpaca": t for t in AI_LEVERAGE_TICKERS})
+
+
+async def _fetch_alpaca_bars(client: httpx.AsyncClient, targets: dict[str, str]) -> list[FetchResult]:
     key_id, secret = os.environ.get("APCA_API_KEY_ID"), os.environ.get("APCA_API_SECRET_KEY")
     if not key_id or not secret:
         return [
@@ -674,13 +612,13 @@ async def fetch_all(
     try:
         singles = await asyncio.gather(
             fetch_nyfed(client),
-            fetch_ecb(client),
             *(fetch_cboe_index(client, k) for k in CBOE_INDEXES),
             *(fetch_yahoo(client, k, s) for k, s in YAHOO_SYMBOLS.items()),
         )
         groups = await asyncio.gather(
             fetch_treasury(client),
             fetch_alpaca(client),
+            fetch_alpaca_leverage(client),
             fetch_eodhd(client),
             fetch_krx(client, cache),
             fetch_cboe_tally(client),

@@ -15,8 +15,6 @@ from app.data import (
     parse_cboe_history,
     parse_cboe_quote,
     parse_cboe_vix,
-    parse_ecb_dxy,
-    parse_eodhd_dxy,
     parse_eodhd_eod,
     parse_krx_kospi,
     parse_krx_samsung,
@@ -52,15 +50,6 @@ TREASURY_CSV = (
     "10/08/2026,4.14,4.23,4.75,5.22,5.60\n"
     "10/07/2026,4.07,4.22,4.77,5.28,5.67\n"
 )
-ECB_XML = """<?xml version="1.0" encoding="UTF-8"?>
-<gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01" xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref">
- <Cube>
-  <Cube time="2026-10-13">
-   <Cube currency="USD" rate="1.1188"/><Cube currency="JPY" rate="176.91"/><Cube currency="GBP" rate="0.84460"/>
-   <Cube currency="CAD" rate="1.5933"/><Cube currency="SEK" rate="11.1698"/><Cube currency="CHF" rate="0.9312"/>
-  </Cube>
- </Cube>
-</gesmes:Envelope>"""
 
 
 def test_parse_yahoo_drops_nulls_and_duplicate_live_bar() -> None:
@@ -145,27 +134,6 @@ def test_parse_eodhd_eod() -> None:
     assert list(s) == [6384.24]
 
 
-def test_eodhd_dxy_matches_ecb_hand_computation() -> None:
-    # Same six rates as the ECB 2026-10-13 fix, expressed as USD pairs: 102.268.
-    eur = 1.1188
-    quotes = {
-        "EURUSD": eur,
-        "USDJPY": 176.91 / eur,
-        "GBPUSD": eur / 0.84460,
-        "USDCAD": 1.5933 / eur,
-        "USDSEK": 11.1698 / eur,
-        "USDCHF": 0.9312 / eur,
-    }
-    payload = [{"code": f"{k}.FOREX", "close": v, "timestamp": 1792000000} for k, v in quotes.items()]
-    _day, value = parse_eodhd_dxy(payload)
-    assert value == pytest.approx(102.268, abs=0.001)
-
-
-def test_eodhd_dxy_missing_pair_raises() -> None:
-    with pytest.raises(DataError):
-        parse_eodhd_dxy([{"code": "EURUSD.FOREX", "close": 1.1, "timestamp": 1792000000}])
-
-
 def test_redact_strips_secret_values(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EODHD_API_KEY", "supersecret123")
     assert redact("GET https://eodhd.com/api/eod/X?api_token=supersecret123 failed") == (
@@ -211,18 +179,6 @@ def test_nyfed_effr_outside_target_range_raises() -> None:
     }
     with pytest.raises(DataError):
         parse_nyfed_effr(payload)
-
-
-def test_ecb_dxy_matches_hand_computation_from_tonight() -> None:
-    # Hand-computed from the ECB 2026-10-13 fix: 102.268 (Yahoo DX-Y.NYB showed 102.189).
-    s = parse_ecb_dxy([ECB_XML])
-    assert s.iloc[-1] == pytest.approx(102.268, abs=0.001)
-
-
-def test_ecb_incomplete_day_skipped() -> None:
-    partial = ECB_XML.replace('<Cube currency="SEK" rate="11.1698"/>', "")
-    with pytest.raises(DataError):
-        parse_ecb_dxy([partial])
 
 
 def test_parse_alpaca_bars_uses_new_york_date() -> None:
@@ -291,7 +247,6 @@ async def test_fetch_all_isolates_failures_and_reports_unconfigured(monkeypatch:
         return_value=httpx.Response(200, json=VIX_QUOTE)
     )
     respx.get(url__startswith="https://markets.newyorkfed.org/").mock(return_value=httpx.Response(404))
-    respx.get(url__startswith="https://www.ecb.europa.eu/").mock(return_value=httpx.Response(200, text=ECB_XML))
     results = await fetch_all()
     tnx = results["y10@cboe"]
     assert tnx.ok and tnx.series is not None and tnx.series.iloc[-1] == pytest.approx(5.217)
@@ -299,8 +254,8 @@ async def test_fetch_all_isolates_failures_and_reports_unconfigured(monkeypatch:
     vix = results["vix@cboe"]
     assert vix.ok and vix.series is not None and list(vix.series) == [15.21, 15.27]
     assert not results["t3m@cboe"].ok and not results["effr@nyfed"].ok
-    assert results["y10@treasury"].ok and results["dxy@ecb"].ok
-    for key in ("soxx@alpaca", "kospi@krx", "kospi@eodhd", "dxy@eodhd"):
+    assert results["y10@treasury"].ok and "dxy@ecb" not in results
+    for key in ("soxx@alpaca", "kospi@krx", "kospi@eodhd", "crwv@alpaca"):
         assert "not configured" in (results[key].error or ""), key
 
 

@@ -37,7 +37,7 @@ def test_regime_payload_shape(client: TestClient, calm_market: dict[str, FetchRe
     assert body["stale"] is False
     assert body["liquidity_squeeze"] is False
     assert body["tnx_yield"] == pytest.approx(4.0, abs=0.05)
-    assert len(body["telemetry"]) == 7 and "rules" not in body and "matrix" not in body
+    assert len(body["telemetry"]) == 6 and "rules" not in body and "matrix" not in body
     assert body["risk_level"] == "CALM" and body["today"]["stress"]["label"] == "Calm"
     assert body["cycle"]["known"] is False and body["phase"] == "Unknown"  # no filings in this test
 

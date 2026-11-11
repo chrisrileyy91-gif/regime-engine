@@ -47,7 +47,6 @@ def market(**series_by_input: pd.Series) -> dict[str, FetchResult]:
         "effr": flat_then(4.33),
         "soxx": trend(200, 260),
         "igv": trend(90, 95),
-        "dxy": flat_then(100.0),
         "kospi": trend(2500, 2700),
         "samsung": trend(60000, 70000),
     }
@@ -59,7 +58,6 @@ def market(**series_by_input: pd.Series) -> dict[str, FetchResult]:
         "effr": ("nyfed",),
         "soxx": ("alpaca", "yahoo"),
         "igv": ("alpaca", "yahoo"),
-        "dxy": ("eodhd", "yahoo", "ecb"),
         "kospi": ("eodhd", "krx", "yahoo"),
         "samsung": ("eodhd", "krx", "yahoo"),
     }
@@ -73,5 +71,5 @@ def market(**series_by_input: pd.Series) -> dict[str, FetchResult]:
 
 @pytest.fixture
 def calm_market() -> dict[str, FetchResult]:
-    """10Y ~4.0% flat, VIX ~15, SOXX in steady uptrend, no cuts priced, DXY ~100."""
+    """10Y ~4.0% flat, VIX ~15, SOXX in steady uptrend, no cuts priced."""
     return market()

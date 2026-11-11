@@ -15,7 +15,7 @@ outgrowing chip prices, and rate cuts being priced. Started from a Gemini-genera
 ## How it runs
 meridian-clock dispatches two workflows on weekdays: `regime-morning.yml` at 06:00 NY (prior US
 session finalized from official sources, plus the overnight Korea session) and `regime-close.yml`
-at 16:25 NY (after the closing auction and VIX settlement). Each runs `python -m app.snapshot`,
+at 16:40 NY (after the closing auction, and after Cboe's delayed feed shows the VIX settlement). Each runs `python -m app.snapshot`,
 which writes `regime.json` + `history.json`, and deploys `web/index.html` with them to GitHub
 Pages: https://chrisrileyy91-gif.github.io/regime-engine/
 
@@ -36,6 +36,12 @@ the "how we go up" catalysts, and the growth series behind it all.
 **Today** (daily): stress label, the one-line diagnosis of the session, the overnight line
 (KOSPI, Samsung, dollar), the three daily drivers, the scapegoat tally, signals, and the last
 30 reads. Every number names its source and date.
+
+The stress label counts only what moved that session: a 10Y jump, a VIX spike (+10%), a semis
+sell-off (SOXX down 4% or an unusual drop). Levels (VIX above 20, RSI below 40) are backdrop. The
+tally reports how much of each semis drop the broad market and yields explain, from a rolling
+regression on prior sessions. `python -m app.replay` (or the "Replay stress label" workflow)
+rebuilds the label over history and scores it against SOXX's own moves.
 
 ## Data: verified or blank
 Same-day sources of record (Cboe, consolidated tape via Alpaca, NY Fed, EODHD), each checked
@@ -82,4 +88,9 @@ today's stress. Plus `cycle` (phase, since, confirmed, checks, metrics, catalyst
 | 16 | Phases read from prices (RSI, 10Y percentile, VIX), re-decided twice a day | Phases last quarters; the dial flipped with daily moves and showed HIGH RISK for months because the 10Y sat at a high level | The cycle is read from filings (capex, chip revenue, software revenue) and changes only when companies report. The daily layer is a separate stress label that counts only what moved that session |
 | 17 | Phase 4 "Rate Easing" | Rate cuts are a catalyst that ends the loop, not a phase of the capex cycle | A catalyst: 3-month bill vs fed funds |
 | 18 | Software monetization by summed revenue incl. Oracle | Oracle's growth is AI cloud rental (buildout), and alone produced a false "acceleration" in the first filings read | Oracle moved to the capex group; software is the median company of six, with breadth |
+| 19 | Stress drivers VIX > 20 and SOXX RSI < 40 | Levels: in 39 scheduled reads every non-Calm label had RSI < 40 active; the label read Elevated on a -8.2% day and a +2.1% day alike, and Stressed on a -0.1% day | Same-session moves only (VIX +10%, SOXX -4% or z < -1.5); levels moved to backdrop |
+| 20 | Tally: first gauge that moved wins, VIX and oil either way included | VIX rises because chips fell (Nov 5: -12%, tagged "VIX spiked"); oil -8% with stocks up was tagged "oil shock" | Outside shocks first (yields, oil up, dollar), then the share the broad market and yields explain; VIX is context |
+| 21 | Close run at 16:25 | Cboe's feed is 15 minutes delayed, so the 16:15 VIX settle was never in (19 of 19 runs) | 16:40 |
+| 22 | Dollar index from live FX or a web search; fixed "DXY > 104.5" trigger | Without an EODHD key it was a search fill every run, labelled verified | UUP from the consolidated tape; the fixed level trigger is gone; search fills are labelled Filled |
+| 23 | Rate cuts read from the 3-month bill | Spans one or two meetings; moves with bill supply | Treasury 2Y vs fed funds (bill as fallback) |
 | 10 | Gemini dashboard: composite scores, "Action: NEUTRAL HEDGE", ARR slider | Undefined formulas; ARR has no feed; showed VIX 21 as "stable" | Dropped. Every number on the page traces to a feed and a rule |

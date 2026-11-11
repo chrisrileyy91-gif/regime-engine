@@ -17,9 +17,11 @@ from app.fundamentals import (
     company_growth,
     earnings_vs_price,
     fetch_filings,
+    funding_ratio,
     group_growth,
     median_acceleration,
     quarterize,
+    single_quarter_growth,
 )
 from tests.sec_fixture import sec_cache
 
@@ -122,7 +124,40 @@ def test_software_acceleration_just_short_of_the_line() -> None:
     accel = next(c for c in monet.conditions if "two quarters" in c.name)
     assert accel.met is False and "total +0.992" in accel.threshold
     software = next(c for c in cycle.catalysts if c.key == "software")
-    assert software.status == "starting"
+    # The median growth RATE fell (14.2% -> 13.6%) while the median CHANGE was +0.36: the page used
+    # to print "starting to accelerate" beside a falling number. It now says both.
+    assert software.status == "mixed"
+    assert "Median growth rate 13.6% (was 14.2%)" in software.detail and "+0.36 pts" in software.detail
+
+
+def test_each_series_is_dated_on_its_own_and_shows_the_single_quarter() -> None:
+    cycle = build_cycle(sec_cache(), {}, None)
+    metrics = {m.key: m for m in cycle.metrics}
+    chips = metrics["chips"]
+    assert chips.through == "Q2 2026" and chips.newest == chips.latest
+    assert chips.single_quarter is not None and chips.single_quarter > chips.latest  # the quarter leads the year
+    ex = metrics["chips_ex"]
+    assert ex.members == ["NVDA", "AVGO", "AMD"] and ex.latest is not None and ex.latest < chips.latest
+    assert "funding" not in metrics  # no cash-flow filings in this fixture: shown only when read
+
+
+def test_the_phase_names_who_it_is_waiting_for() -> None:
+    cycle = build_cycle(sec_cache(), {}, None)
+    assert cycle.through == "Q2 2026" and cycle.waiting_on
+    assert set(cycle.waiting_on) <= {t for g in CYCLE_COMPANIES.values() for t, _, _ in g}
+
+
+def test_single_quarter_growth_and_funding_ratio() -> None:
+    def quarters(values: list[float]) -> pd.Series:
+        ends = pd.period_range("2024Q1", periods=len(values), freq="Q").to_timestamp(how="end").normalize()
+        return pd.Series(values, index=ends)
+
+    a, b = quarters([10, 10, 10, 10, 12, 12, 12, 20]), quarters([10, 10, 10, 10, 10, 10, 10, 10])
+    one = single_quarter_growth({"A": a, "B": b})
+    assert one[Q("2025Q4")] == pytest.approx(50.0)  # (20 + 10) / (10 + 10)
+    ratio = funding_ratio({"A": a, "B": b}, {"A": quarters([20] * 8), "B": quarters([20] * 8)})
+    assert ratio[Q("2024Q4")] == pytest.approx(50.0) and ratio[Q("2025Q4")] == pytest.approx(96 / 160 * 100)
+    assert funding_ratio({"A": a, "B": b}, {"A": a}).empty  # a company without cash flow: no reading
 
 
 def test_missing_company_makes_the_cycle_unknown_not_wrong() -> None:
@@ -161,6 +196,16 @@ def test_rate_cut_catalyst() -> None:
     assert cuts.status == "yes" and hikes.status == "not yet" and "hikes are priced" in hikes.detail
 
 
+def test_rate_cut_catalyst_prefers_the_two_year() -> None:
+    def cuts(gap_2y: float) -> object:
+        cycle = build_cycle(sec_cache(), {}, effr_minus_bill=0.40, effr_minus_2y=gap_2y)
+        return {c.key: c for c in cycle.catalysts}["cuts"]
+
+    assert cuts(0.60).status == "yes" and "2-year yield is 0.60 pts below" in cuts(0.60).detail  # type: ignore[attr-defined]
+    assert cuts(-0.67).status == "not yet" and "hikes are priced" in cuts(-0.67).detail  # type: ignore[attr-defined]
+    assert "no clear move" in cuts(0.10).detail  # type: ignore[attr-defined]
+
+
 # --- fetching ----------------------------------------------------------------------------------
 
 
@@ -188,7 +233,23 @@ async def test_fetch_checks_the_company_name_and_keeps_cache_on_failure() -> Non
 
 async def test_fetch_skipped_when_fresh() -> None:
     cache = sec_cache(fetched_at="2026-10-15T00:00:00+00:00")
+    for ticker, _, _ in CYCLE_COMPANIES["hyperscalers"]:
+        cache["companies"][ticker]["ocf"] = {"error": "none yet"}
     assert await fetch_filings(None, cache, datetime(2026, 10, 15, 10, tzinfo=timezone.utc)) == []
+
+
+@respx.mock
+async def test_a_cache_written_before_a_series_was_added_refetches_at_once() -> None:
+    """The funding gauge needs operating cash flow; a fresh cache without it must not wait 20 hours."""
+    names = {cik: name for group in CYCLE_COMPANIES.values() for _, cik, name in group}
+    for cik, name in names.items():
+        respx.get(url__startswith=SEC_CONCEPT_URL.split("CIK")[0] + f"CIK{cik}/").mock(
+            return_value=httpx.Response(200, json=_concept(name))
+        )
+    cache = sec_cache(fetched_at="2026-10-15T00:00:00+00:00")
+    async with httpx.AsyncClient() as client:
+        await fetch_filings(client, cache, datetime(2026, 10, 15, 10, tzinfo=timezone.utc))
+    assert "facts" in cache["companies"]["MSFT"]["ocf"]
 
 
 @respx.mock

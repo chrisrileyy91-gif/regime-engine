@@ -9,7 +9,7 @@ import pandas as pd
 
 from app.cache import SnapshotStore
 from app.claude_fill import FillReport, apply_fills
-from app.config import CYCLE_PRICE_TICKERS, TALLY_TICKERS
+from app.config import AI_LEVERAGE_TICKERS, CYCLE_PRICE_TICKERS, TALLY_TICKERS
 from app.data import FetchResult, fetch_all
 from app.drivers import backdrop, build_drivers, diagnose
 from app.features import build_features
@@ -37,8 +37,11 @@ def chip_prices(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
 
 
 def tally_extras(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
-    """Tally-only series: the equal-weight S&P 500 and Cboe's intraday highs and 30Y."""
+    """Official series that aren't cross-checked inputs: the equal-weight S&P 500, oil, the dollar,
+    high-yield bonds and the debt-funded AI names (consolidated tape); Cboe's intraday highs and
+    30Y; Treasury's 2Y."""
     keys = {name: f"{ticker.lower()}@alpaca" for name, ticker in TALLY_TICKERS.items()}
+    keys.update({f"lev_{t.lower()}": f"{t.lower()}@alpaca" for t in AI_LEVERAGE_TICKERS})
     keys.update({"y10_high": "y10_high@cboe", "y30": "y30@cboe", "y30_high": "y30_high@cboe", "y2": "y2@treasury"})
     out = {}
     for name, key in keys.items():
@@ -66,10 +69,11 @@ def build_status(
                 QualityIssue(severity="info", message=f"{verified[key].status.label}: filled by Claude web search")
             )
         quality.issues += [QualityIssue(severity="info", message=n) for n in fills.notes]
-    features = build_features(verified)
+    extras = tally_extras(results)
+    features = build_features(verified, extras)
     drivers = build_drivers(features, {k: v.status for k, v in verified.items()})
-    cycle = build_cycle(sec_cache, chip_prices(results), features.effr_minus_3m_pct)
-    day = build_today(features, drivers, verified)
+    cycle = build_cycle(sec_cache, chip_prices(results), features.effr_minus_3m_pct, features.effr_minus_2y_pct)
+    day = build_today(features, drivers, verified, extras)
     squeeze = _any(
         [
             Condition(name=d.key, value=None, threshold="", met={"ACTIVE": True, "QUIET": False}.get(d.state))
@@ -91,13 +95,13 @@ def build_status(
         as_of=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         cycle=cycle,
         today=day,
-        tally=tally(verified, tally_extras(results), news),
+        tally=tally(verified, extras, news),
         diagnosis=diagnose(features, drivers),
         backdrop=backdrop(features),
         drivers=drivers,
         data_quality=quality,
         input_dates=dict(features.dates),
-        telemetry=telemetry(features),
+        telemetry=telemetry(features, {k: v.status.source for k, v in verified.items() if v.series is not None}),
         inputs=features.as_dict(),
         sources=[
             SourceStatus(key=r.key, symbol=r.symbol, source=r.source, ok=r.ok, last_date=r.last_date, error=r.error)

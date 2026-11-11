@@ -13,7 +13,7 @@ What makes a filled number usable:
     search results (no invented citations);
   * it agrees with Yahoo within the input's confirming tolerance. Claude is never told
     Yahoo's number, so the agreement is independent.
-The filled value is spliced onto the input's history and marked VERIFIED, with the source
+The filled value is spliced onto the input's history and marked FILLED, with the source
 page named. Anything else is dropped and noted.
 """
 
@@ -386,7 +386,7 @@ def apply_fills(verified: dict[str, Verified], report: FillReport) -> dict[str, 
                 key=key,
                 label=old.label,
                 used_in_call=old.used_in_call,
-                status="VERIFIED",
+                status="FILLED",
                 value=fill.value,
                 date=fill.date,
                 source=f"Claude web search ({_host(fill.source_url)})",

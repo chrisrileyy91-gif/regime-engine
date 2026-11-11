@@ -114,13 +114,13 @@ def test_in_progress_korean_session_falls_back_to_the_last_close() -> None:
 @respx.mock
 async def test_fill_that_fails_a_veto_check_is_dropped(api_key: None) -> None:
     results = market()
-    results["dxy@eodhd"] = failed("dxy@eodhd", "not configured")
-    yahoo = float(results["dxy@yahoo"].series.iloc[-1])
-    results["dxy@ecb"] = ok("dxy@ecb", results["dxy@ecb"].series + 5.0)  # ECB-fix DXY 5 points away
-    answer = f'[{{"id": "dxy", "date": "{TODAY_STR}", "value": {yahoo}, "source_url": "https://www.reuters.com/markets/kospi"}}]'
+    results["y10@cboe"] = failed("y10@cboe", "down")
+    yahoo = float(results["y10@yahoo"].series.iloc[-1])
+    results["y10@treasury"] = ok("y10@treasury", results["y10@treasury"].series + 1.0)  # Treasury a point away
+    answer = f'[{{"id": "y10", "date": "{TODAY_STR}", "value": {yahoo}, "source_url": "https://www.reuters.com/markets/kospi"}}]'
     respx.post(ANTHROPIC_URL).mock(return_value=httpx.Response(200, json=claude_payload(answer)))
     report = await run_fill(results)
-    assert report.fills == {} and any("fails the ECB reference rates check" in n for n in report.notes)
+    assert report.fills == {} and any("check" in n and "not used" in n for n in report.notes)
 
 
 def test_prompt_never_reveals_the_check_value() -> None:
@@ -179,7 +179,7 @@ async def test_agreeing_fill_is_used_and_spliced(api_key: None) -> None:
 
     verified = apply_fills(verify_all(results, TODAY.date()), report)
     status = verified["kospi"].status
-    assert status.status == "VERIFIED" and status.confirmed_by == ["Yahoo"] and "reuters.com" in (status.source or "")
+    assert status.status == "FILLED" and status.confirmed_by == ["Yahoo"] and "reuters.com" in (status.source or "")
     features = build_features(verified)
     assert features.ks11 == pytest.approx(yahoo_kospi(results)) and features.ks11_sma200 is not None
 
@@ -266,7 +266,7 @@ async def test_fill_flows_through_to_the_published_payload(api_key: None) -> Non
     status = build_status(results, today=TODAY.date(), fills=report)
     assert status.data_quality is not None and status.data_quality.status == "OK"
     kospi = next(i for i in status.data_quality.inputs if i.key == "kospi")
-    assert kospi.status == "VERIFIED" and kospi.source == "Claude web search (reuters.com)"
+    assert kospi.status == "FILLED" and kospi.source == "Claude web search (reuters.com)"
     assert any("filled by Claude" in i.message for i in status.data_quality.issues)
 
 

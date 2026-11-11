@@ -1,6 +1,7 @@
-# Close read, 16:25 New York, dispatched by meridian-clock (schedule.json).
-# 16:25, not 16:05: the closing auction prints at 16:00, VIX settles at 16:15, and the free
-# consolidated-tape feed only serves data at least 15 minutes old.
+# Close read, 16:40 New York, dispatched by meridian-clock (schedule.json).
+# 16:40, not 16:25: VIX settles at 16:15 and Cboe's quote feed is 15 minutes delayed, so the settle
+# isn't visible before ~16:30 (all 19 close runs from Oct 14 to Nov 10, 2026 carried the prior
+# day's VIX). The free consolidated-tape feed also only serves data at least 15 minutes old.
 # Do not add a `schedule:` block: the clock counts any run today as "already ran".
 name: Regime (close)
 

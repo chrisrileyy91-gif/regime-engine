@@ -17,10 +17,19 @@ class Thresholds:
     tnx_1d_spike_bps: float = 10.0  # 10Y up this much in a session
     tnx_delta_z: float = 1.5  # ...or an unusual move: z-score of the change vs the prior window
     tnx_delta_z_window: int = 60
-    vix_level: float = 20.0  # volatility high enough to force systematic de-risking
-    semi_rsi_digestion: float = 40.0  # SOXX RSI(14) below this = chip momentum broken
-    vix_jump_pct: float = 10.0  # tally: VIX up this much on a semis down day = market-wide fear
-    market_drop_pct: float = -1.0  # tally: equal-weight S&P 500 down this much the same day = broad selling
+    vix_jump_pct: float = 10.0  # VIX up this much in a session = a volatility spike
+    soxx_drop_z: float = -1.5  # SOXX's 1-session return this unusual vs its prior window = a sell-off
+    soxx_drop_floor_pct: float = -4.0  # ...or this big regardless: after a rout the z adapts (same
+    # reason as oil_move_pct). Nov 6-10, 2026: a 60-day window that holds a -12% day reads -4% as mild.
+    soxx_z_window: int = 60
+    # Tally: share of a semis drop that the broad market and yields explain (rolling regression of
+    # SOXX's daily return on the equal-weight S&P 500's return and the 10Y change, prior sessions only).
+    decomp_window: int = 120
+    decomp_min_sessions: int = 60
+    macro_share: float = 0.5  # at least this much explained = "the broad market fell", else chip-specific
+    market_drop_pct: float = -1.0  # shown in the day list only: equal-weight S&P 500 down this much
+    credit_z: float = -2.0  # tally: HYG down this unusually = credit stress (annotation, never the label)
+    credit_move_pct: float = -0.75  # ...or this big regardless
     oil_z: float = 2.0  # tally: USO move this unusual (either way) vs its prior 60 sessions = oil shock
     oil_move_pct: float = 4.0  # ...or this big regardless: in a war regime a 60-day z adapts the shocks
     # away (Sep 1, US strikes on Iran: USO +5.5% was only 1.65 sigma)
@@ -30,15 +39,20 @@ class Thresholds:
     tally_z_window: int = 60
 
     # --- Backdrop and telemetry (shown, never counted as stress) -----------------------------
+    # VIX above 20 and SOXX RSI below 40 were stress drivers until Nov 2026. Both are levels: across
+    # the first 39 scheduled reads every non-Calm label had RSI < 40 active, so the label read
+    # "Elevated" on a -8.2% day and on a +2.1% day alike. They are backdrop now.
+    vix_level: float = 20.0  # volatility high enough to force systematic de-risking
+    semi_rsi_digestion: float = 40.0  # SOXX RSI(14) below this = chip momentum weak
     tnx_pctile_high: float = 80.0  # 10Y higher than this % of the trailing window
     tnx_pctile_window: int = 250  # ~1 year of Treasury business days
     ratio_sma_window: int = 20  # IGV/SOXX ratio trend
     ratio_slope_lookback: int = 5
     ks11_sma_window: int = 200
-    dxy_compression: float = 104.5
 
     # --- Rate-cut catalyst ---------------------------------------------------------------------
-    cuts_priced_spread_pct: float = 0.10  # 3M bill below EFFR by more than this = cuts priced
+    cuts_priced_spread_pct: float = 0.10  # 3M bill below EFFR by more than this = cuts priced (fallback)
+    cuts_2y_spread_pct: float = 0.25  # 2Y below EFFR by more than this = cuts priced over two years
 
     rsi_period: int = 14
 
@@ -63,8 +77,6 @@ TREASURY_CSV_URL = (
     "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/{year}/all"
 )
 NYFED_EFFR_URL = "https://markets.newyorkfed.org/api/rates/unsecured/effr/last/60.json"
-ECB_DAILY_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
-ECB_90D_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"
 ALPACA_BARS_URL = "https://data.alpaca.markets/v2/stocks/bars"
 ALPACA_SIP_MIN_AGE_MINUTES = 16  # free plan: SIP queries must end >= 15 minutes ago
 # Splits, so a check that hasn't re-based its history yet isn't read as a wrong number (Nov 5,
@@ -77,7 +89,6 @@ ALPACA_CORPORATE_ACTIONS_URLS = (
 SPLIT_LOOKBACK_DAYS = 45  # ex-dates this far back still affect the compared window
 SPLIT_LOOKAHEAD_DAYS = 7  # Alpaca can apply an announced split before its ex-date
 EODHD_EOD_URL = "https://eodhd.com/api/eod/{symbol}"
-EODHD_LIVE_URL = "https://eodhd.com/api/real-time/{symbol}"
 EODHD_HISTORY_DAYS = 365  # the free plan serves one year; enough for SMA200 and RSI
 KRX_BASE_URL = "https://data-dbg.krx.co.kr/svc/apis"
 KRX_HISTORY_SESSIONS = 260  # backfilled once, then cached in the snapshots release
@@ -93,16 +104,12 @@ CBOE_INDEXES: dict[str, tuple[str, float, str]] = {
     "vix@cboe": ("VIX", 1.0, "16:14"),  # VIX settles 16:15
 }
 
-# ICE U.S. Dollar Index formula (published weights).
-DXY_CONSTANT = 50.14348112
-DXY_WEIGHTS = {"EURUSD": -0.576, "USDJPY": 0.136, "GBPUSD": -0.119, "USDCAD": 0.091, "USDSEK": 0.042, "USDCHF": 0.036}
-
 # --- Inputs ---------------------------------------------------------------------------
 # `record`: sources of the number itself, newest date wins. `checks`: (source key,
 # tolerance, "abs"|"pct", confirms). A confirming check that has the record's date and
 # agrees makes the input VERIFIED; a non-confirming check (different methodology or
 # timing) can only veto gross errors.
-OFFICIAL_SOURCES = {"cboe", "treasury", "nyfed", "alpaca", "krx", "ecb"}
+OFFICIAL_SOURCES = {"cboe", "treasury", "nyfed", "alpaca", "krx"}
 
 
 @dataclass(frozen=True)
@@ -137,13 +144,9 @@ INPUTS: dict[str, InputSpec] = {
     "effr": InputSpec("Effective fed funds rate", ("effr@nyfed",), (), True, 7),
     "soxx": InputSpec("SOXX close", ("soxx@alpaca",), (("soxx@yahoo", 0.3, "pct", True),), True, 5),
     "igv": InputSpec("IGV close", ("igv@alpaca",), (("igv@yahoo", 0.3, "pct", True),), True, 5),
-    "dxy": InputSpec(
-        "Dollar index (DXY)",
-        ("dxy@eodhd",),
-        (("dxy@yahoo", 0.25, "abs", True), ("dxy@ecb", 1.0, "abs", False)),
-        False,  # background telemetry since the cycle moved to filings
-        4,
-    ),
+    # The dollar index (DXY) was an input until Nov 2026. Without an EODHD key it was filled by a
+    # web search every run and labelled verified; the dollar is read from UUP on the consolidated
+    # tape instead (TALLY_TICKERS), same day, no search.
     "kospi": InputSpec("KOSPI", ("kospi@eodhd", "kospi@krx"), (("kospi@yahoo", 0.1, "pct", True),), False, 6),
     "samsung": InputSpec(
         "Samsung Electronics", ("samsung@eodhd", "samsung@krx"), (("samsung@yahoo", 0.1, "pct", True),), False, 6
@@ -158,26 +161,16 @@ YAHOO_SYMBOLS: dict[str, str] = {
     "vix@yahoo": "^VIX",
     "soxx@yahoo": "SOXX",
     "igv@yahoo": "IGV",
-    "dxy@yahoo": "DX-Y.NYB",
     "kospi@yahoo": "^KS11",
     "samsung@yahoo": "005930.KS",
 }
 EODHD_EOD_SYMBOLS = {"kospi@eodhd": "KS11.INDX", "samsung@eodhd": "005930.KO"}
-EODHD_FX = {
-    "EURUSD": "EURUSD.FOREX",
-    "USDJPY": "USDJPY.FOREX",
-    "GBPUSD": "GBPUSD.FOREX",
-    "USDCAD": "USDCAD.FOREX",
-    "USDSEK": "USDSEK.FOREX",
-    "USDCHF": "USDCHF.FOREX",
-}
 
 SANITY_BOUNDS: dict[str, tuple[float, float]] = {
     "y10": (0.0, 20.0),
     "t3m": (0.0, 20.0),
     "vix": (5.0, 150.0),
     "effr": (0.0, 25.0),
-    "dxy": (60.0, 160.0),
     "soxx": (1.0, 100000.0),
     "igv": (1.0, 100000.0),
     "kospi": (100.0, 100000.0),
@@ -185,7 +178,9 @@ SANITY_BOUNDS: dict[str, tuple[float, float]] = {
 }
 
 # --- Publishing schedule (New York time, weekdays). Mirrors meridian-clock. ---------
-SCHEDULE_NY = ("06:00", "16:25")
+# 16:40, not 16:25: Cboe's quote feed is 15 minutes delayed and VIX settles at 16:15, so the settle
+# isn't visible before ~16:30. All 19 close runs from Oct 14 to Nov 10, 2026 carried the prior VIX.
+SCHEDULE_NY = ("06:00", "16:40")
 MISSED_RUN_GRACE_MINUTES = 60
 
 # --- Claude web search: last-resort gap filler ------------------------------------------
@@ -232,7 +227,6 @@ GAP_QUESTIONS: dict[str, tuple[str, str]] = {
     "vix": ("Cboe Volatility Index (VIX) official closing value", "us"),
     "soxx": ("iShares Semiconductor ETF (SOXX) official closing price in USD", "us"),
     "igv": ("iShares Expanded Tech-Software Sector ETF (IGV) official closing price in USD", "us"),
-    "dxy": ("ICE U.S. Dollar Index (DXY) latest value", "fx"),
     "kospi": ("KOSPI index official closing value on the Korea Exchange", "kr"),
     "samsung": ("Samsung Electronics (005930) official closing price on the Korea Exchange, in KRW", "kr"),
 }
@@ -279,6 +273,7 @@ CYCLE_COMPANIES: dict[str, list[tuple[str, str, str]]] = {
 # (Intuit files both revenue tags, but only one goes back before 2023).
 CYCLE_TAGS: dict[str, tuple[str, ...]] = {
     "capex": ("PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"),
+    "ocf": ("NetCashProvidedByUsedInOperatingActivities",),
     "revenue": ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"),
     "eps": ("EarningsPerShareDiluted",),
 }
@@ -287,6 +282,15 @@ CYCLE_GROUP_METRIC = {"hyperscalers": "capex", "chips": "revenue", "software": "
 # fast grower can't stand in for the industry; breadth (how many are accelerating) is shown too.
 CYCLE_GROUP_HOW = {"hyperscalers": "sum", "chips": "sum", "software": "median"}
 CYCLE_HISTORY_QUARTERS = 12
+# Funding: how much of the spenders' operating cash flow their capex consumes (trailing year). The
+# headlines on 9 of the 20 semis drops to Nov 5, 2026 were about who pays for the buildout (Meta's
+# credit, CoreWeave's debt, debt-funded chip deals) and nothing on the page measured it. Shown, not
+# part of the phase rules. Debt issuance is not read: filings omit quarters with no issuance, so a
+# gap can't be told from a zero.
+FUNDING_GROUP = "hyperscalers"
+# Chip revenue is also shown without these: memory prices, not AI orders, drive Micron's swings
+# (single-quarter revenue +346% year over year in Q2 2026).
+CHIPS_EX = ("MU",)
 # Chip stock prices for "earnings vs price": quarter-end closes from the Alpaca SIP feed, fetched
 # with SOXX/IGV. Not cross-checked (a quarterly comparison, never part of the daily call).
 CYCLE_PRICE_TICKERS = tuple(t for t, _, _ in CYCLE_COMPANIES["chips"])
@@ -297,7 +301,11 @@ MARKET_TICKER = "RSP"
 # Oil and the dollar, same-day, from the same consolidated tape (the choice Crude Logic already
 # made after Yahoo's CL=F broke): USO tracks front-month WTI futures, UUP the dollar index.
 # EIA's official WTI spot posts in weekly batches, too late for a same-day read.
-TALLY_TICKERS = {"market": MARKET_TICKER, "oil": "USO", "dollar": "UUP"}
+# HYG (high-yield bonds) is the same-day credit gauge.
+TALLY_TICKERS = {"market": MARKET_TICKER, "oil": "USO", "dollar": "UUP", "credit": "HYG"}
+# Debt-funded AI names. Their average move is shown beside SOXX on each tally day: when they fall
+# harder than chips, the selling is about funding. Any that Alpaca doesn't return are left out.
+AI_LEVERAGE_TICKERS = ("CRWV", "ORCL", "NBIS")
 # Tally-only Cboe series (official, not cross-checked; classification only). Close-to-close data
 # misses a yield spike that reverses: on CPI day Oct 14 the 10Y rose 11 bps intraday and closed -3.
 # The 30Y catches long-end shocks the 10Y misses (Aug 18: 30Y at its highest since 2007).

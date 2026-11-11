@@ -376,7 +376,7 @@ def assess(verified: dict[str, Verified]) -> DataQuality:
                 )
             )
     call_inputs = [v.status for v in verified.values() if v.status.used_in_call]
-    good = [s for s in call_inputs if s.status in ("VERIFIED", "OFFICIAL") and not s.stale]
+    good = [s for s in call_inputs if s.status in ("VERIFIED", "OFFICIAL", "FILLED") and not s.stale]
     verified_count = sum(1 for s in call_inputs if s.status == "VERIFIED")
     status = "OK" if len(good) == len(call_inputs) else "DEGRADED"
     summary = f"{len(good)} of {len(call_inputs)} call inputs usable, {verified_count} independently confirmed."

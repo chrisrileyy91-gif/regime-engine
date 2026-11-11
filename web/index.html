@@ -148,7 +148,7 @@
   .cat-detail { margin-top: 3px; font-size: 13.5px; color: var(--ink-2); }
   .status { font-size: 12.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; background: var(--unknown-soft); color: var(--unknown); }
   .status.yes { background: var(--low-soft); color: var(--low); }
-  .status.starting { background: var(--moderate-soft); color: var(--moderate); }
+  .status.starting, .status.mixed { background: var(--moderate-soft); color: var(--moderate); }
   .status.not-yet { background: var(--unknown-soft); color: var(--ink-2); }
 
   /* cycle metrics */
@@ -159,6 +159,8 @@
   .cm-members { display: block; font-size: 12px; color: var(--ink-3); font-weight: 400; }
   .cm-value { text-align: right; font-weight: 700; font-size: 17px; }
   .cm-prev { display: block; font-size: 12px; color: var(--ink-3); font-weight: 500; }
+  .cm-note { grid-column: 1 / -1; font-size: 12px; color: var(--ink-3); margin: 2px 0 0; }
+  .tday-share { display: inline-block; font-size: 11.5px; font-weight: 600; color: var(--ink-2); margin-left: 6px; }
   .spark { grid-column: 1 / -1; width: 100%; height: 34px; margin-top: 4px; }
   .spark path { fill: none; stroke: var(--p1); stroke-width: 1.8; }
   .spark .zero { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 3; }
@@ -245,6 +247,7 @@
   .badge { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; margin-right: 6px; }
   .badge.VERIFIED, .badge.FILED { background: var(--low-soft); color: var(--low); }
   .badge.OFFICIAL { background: var(--unknown-soft); color: var(--ink-2); }
+  .badge.FILLED { background: var(--moderate-soft); color: var(--moderate); }
   .badge.CONFLICT, .badge.MISSING, .badge.UNCONFIRMED, .badge.FAILED { background: var(--high-soft); color: var(--high); }
   .badge.STALE { background: var(--moderate-soft); color: var(--moderate); }
   .filings { margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
@@ -317,7 +320,7 @@
 
     <section>
       <h2>The numbers behind the cycle</h2>
-      <p class="lede">Trailing-twelve-month growth, year over year, by calendar quarter.</p>
+      <p class="lede">Trailing-twelve-month growth, year over year, by calendar quarter, each series through its own latest quarter. The quarter alone is shown beside it because a trailing year turns about two quarters late. The last row is a level, not growth: how much of their operating cash flow the spenders' capex consumes.</p>
       <div class="card metrics-card" id="cycle-metrics"></div>
     </section>
 
@@ -331,7 +334,7 @@
 
     <section>
       <h2>Is it a scapegoat?</h2>
-      <p class="lede">What moved on each recent semis sell-off. Gauges first, in order: yields (2Y, 10Y and 30Y; close or intraday), oil, the dollar, VIX, the equal-weight S&amp;P 500. Then the day's headlines (Benzinga, read by Claude, each label linked to its articles). When the two disagree, the day is flagged.</p>
+      <p class="lede">What explains each recent semis sell-off. First the outside shocks, in order: yields (2Y, 10Y and 30Y; close or intraday), oil rising, the dollar. Then how much of the drop the broad market and yields account for at SOXX's usual sensitivity: half or more reads as the broad market, less as chip-specific. VIX is shown but never counted as a cause, because it rises when chips fall. Then the day's headlines (Benzinga, read by Claude, each label linked to its articles). When the two disagree, the day is flagged.</p>
       <div class="tally-bar" id="tally-bar"></div>
       <div class="tally-legend" id="tally-legend"></div>
       <p class="tally-summary" id="tally-summary"></p>
@@ -355,7 +358,7 @@
 
     <section>
       <h2>Where every number comes from</h2>
-      <p class="lede">Verified means an independent source agrees on the same date. Official means it comes straight from the source of record. A number that fails a check is withheld, never guessed.</p>
+      <p class="lede">Verified means an independent source agrees on the same date. Official means it comes straight from the source of record. Filled means the source of record was missing and a web search found a published value that matches an independent copy. A number that fails a check is withheld, never guessed.</p>
       <div class="card inputs" id="inputs"></div>
       <h3 class="sub">Company filings (SEC EDGAR)</h3>
       <p class="lede" id="filings-lede"></p>
@@ -364,7 +367,7 @@
 
     <footer>
       <ul id="notes"></ul>
-      <p>Updates weekdays at 6:00 AM (prior US session plus the overnight Korea session) and 4:25 PM ET. Filings are re-read once a day; the cycle changes only when companies report. Thresholds are not yet backtested. Not a trading signal.</p>
+      <p>Updates weekdays at 6:00 AM (prior US session plus the overnight Korea session) and 4:40 PM ET. Filings are re-read once a day; the cycle changes only when companies report. Thresholds are not yet backtested. Not a trading signal.</p>
     </footer>
   </div>
 
@@ -383,27 +386,28 @@
     STRESSED: ["var(--high)", "var(--high-soft)"], UNKNOWN: ["var(--unknown)", "var(--unknown-soft)"],
   };
   const STRESS_NOTE = {
-    CALM: "No same-day driver fired. A drop today would be chip-specific.",
-    ELEVATED: "One same-day driver fired.",
-    STRESSED: "Two or more drivers fired, or VIX is above 30.",
+    CALM: "Yields, volatility and chips all stayed within their usual range today.",
+    ELEVATED: "One thing moved unusually today: yields jumped, VIX spiked, or chips sold off.",
+    STRESSED: "Two or more moved unusually today, or VIX is above 30.",
     UNKNOWN: "Not every driver had an official close for this session.",
   };
   const TALLY = {
     rates: ["t-rates", "Yields jumped (2Y, 10Y or 30Y)"],
-    oil: ["t-oil", "Oil shock (USO 4%+ or 2σ)"],
+    oil: ["t-oil", "Oil jumped (USO up 4%+ or 2σ)"],
     dollar: ["t-dollar", "Dollar jumped (UUP, 2σ)"],
-    fear: ["t-fear", "VIX spiked"],
-    market: ["t-market", "Broad market fell (equal-weight S&P −1%+)"],
-    rotation: ["t-rotation", "No gauge moved; money rotated into software"],
-    chips: ["t-chips", "No gauge moved; software fell too"],
+    fear: ["t-fear", "VIX spiked (older reads only)"],
+    market: ["t-market", "Broad market and yields explain half or more"],
+    rotation: ["t-rotation", "Mostly chip-specific; money rotated into software"],
+    chips: ["t-chips", "Mostly chip-specific; software fell too"],
     unknown: ["t-unknown", "Couldn't tell (a gauge was missing)"],
   };
+  const tallyOf = (k) => TALLY[k] || TALLY.unknown;
   const NEWS = { company: "Company news", ai_demand: "AI-demand worries", policy: "Policy", analyst: "Analyst calls", macro_data: "Economic data", fed: "The Fed", geopolitics: "Geopolitics/oil", none_clear: "Nothing clear", unlabelled: "Not read yet" };
-  const TAG = { rates: "yields", oil: "oil", dollar: "dollar", fear: "VIX", market: "broad market", rotation: "rotation", chips: "chips alone", unknown: "unknown" };
-  const CAT_TEXT = { yes: "Yes", starting: "Starting", "not yet": "Not yet", unknown: "Unknown" };
-  const SCHEDULE_NY = ["06:00", "16:25"];  // mirrors meridian-clock schedule.json
+  const TAG = { rates: "yields", oil: "oil", dollar: "dollar", fear: "VIX", market: "broad market", credit: "credit (high-yield bonds)", rotation: "rotation", chips: "chips alone", unknown: "unknown" };
+  const CAT_TEXT = { yes: "Yes", starting: "Starting", mixed: "Mixed", "not yet": "Not yet", unknown: "Unknown" };
+  const SCHEDULE_NY = ["06:00", "16:40"];  // mirrors meridian-clock schedule.json
   const GRACE_MINUTES = 60;
-  const STATUS_TEXT = { VERIFIED: "Verified", OFFICIAL: "Official", CONFLICT: "Withheld", UNCONFIRMED: "Withheld", MISSING: "Unavailable" };
+  const STATUS_TEXT = { VERIFIED: "Verified", OFFICIAL: "Official", FILLED: "Filled", CONFLICT: "Withheld", UNCONFIRMED: "Withheld", MISSING: "Unavailable" };
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const nyTime = (iso, opts) => new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", ...opts });
@@ -510,6 +514,7 @@
       pills.push(`<span class="pill accent"><span class="dot"></span>Since ${esc(cycle.since)} · ${cycle.confirmed ? `confirmed, ${n} quarters` : "new, not yet confirmed"}</span>`);
     }
     if (cycle.through) pills.push(`<span class="pill">Filings through ${esc(cycle.through)}</span>`);
+    if ((cycle.waiting_on || []).length) pills.push(`<span class="pill">Next quarter waits on ${esc(cycle.waiting_on.join(", "))}</span>`);
     $("phase-meta").innerHTML = pills.join("");
     $("summary").textContent = cycle.summary;
 
@@ -551,11 +556,22 @@
 
     $("cycle-metrics").innerHTML = (cycle.metrics || []).map((m) => {
       const h = m.history || [];
+      const level = m.kind === "level";
+      // Each series shows its own newest quarter; older payloads only carry `latest`.
+      const value = m.newest ?? m.latest;
+      const prior = h.length > 1 ? h[h.length - 2].value : m.previous;
+      const show = (v) => (level ? `${v.toFixed(0)}%` : `${signed(v)}%`);
+      const notes = [];
+      if (m.through) notes.push(`through ${m.through}`);
+      if (m.single_quarter !== null && m.single_quarter !== undefined) notes.push(`that quarter alone ${signed(m.single_quarter)}%`);
+      if (m.through && cycle.through && m.through !== cycle.through && m.latest !== null) notes.push(`the phase reads ${cycle.through}: ${show(m.latest)}`);
+      if (level) notes.push("above 100% means spending more than the cash coming in");
       return `<div class="cm">
         <span class="cm-name">${esc(m.label)}<span class="cm-members">${esc(m.members.join(", "))}</span></span>
-        <span class="cm-value">${m.latest === null ? "n/a" : `${signed(m.latest)}%`}<span class="cm-prev">${m.previous === null ? "" : `prior quarter ${signed(m.previous)}%`}</span></span>
+        <span class="cm-value">${value === null || value === undefined ? "n/a" : show(value)}<span class="cm-prev">${prior === null || prior === undefined ? "" : `prior quarter ${show(prior)}`}</span></span>
         ${h.length > 1 ? spark(h) : ""}
         ${h.length > 1 ? `<div class="spark-axis"><span>${esc(h[0].quarter)}</span><span>${esc(h[h.length - 1].quarter)}</span></div>` : ""}
+        ${notes.length ? `<p class="cm-note">${esc(notes.join(" · "))}</p>` : ""}
       </div>`;
     }).join("");
 
@@ -623,8 +639,8 @@
     if (!tally) return;
     const keys = Object.keys(tally.counts || {});
     const total = keys.reduce((a, k) => a + tally.counts[k], 0);
-    $("tally-bar").innerHTML = total ? keys.map((k) => `<span class="${TALLY[k][0]}" style="width:${(100 * tally.counts[k] / total).toFixed(2)}%"></span>`).join("") : "";
-    $("tally-legend").innerHTML = keys.map((k) => `<div><i class="${TALLY[k][0]}"></i><span>${esc(TALLY[k][1])}</span><b>${tally.counts[k]}</b></div>`).join("");
+    $("tally-bar").innerHTML = total ? keys.map((k) => `<span class="${tallyOf(k)[0]}" style="width:${(100 * tally.counts[k] / total).toFixed(2)}%"></span>`).join("") : "";
+    $("tally-legend").innerHTML = keys.map((k) => `<div><i class="${tallyOf(k)[0]}"></i><span>${esc(tallyOf(k)[1])}</span><b>${tally.counts[k]}</b></div>`).join("");
     $("tally-summary").textContent = tally.summary;
     if (!tally.days.length) { $("tally-more").hidden = true; return; }
     $("tally-days").innerHTML = tally.days.map((d) => {
@@ -632,7 +648,7 @@
       const news = n ? `<div class="tday-news"><b>${esc(NEWS[n.category] || n.category)}:</b> ${esc(n.summary)}${(n.evidence || []).map((e) => `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.time)} · ${esc(e.headline)}</a>`).join("")}</div>` : "";
       const also = (d.moved || []).filter((m) => m !== d.driver).map((m) => TAG[m] || m);
       return `<div class="tday">
-        <span>${esc(dayLabel(d.date))}<span class="tag ${TALLY[d.driver][0]}">${esc(TAG[d.driver] || d.driver)}</span>${d.provisional ? `<span class="tag pending">provisional</span>` : ""}</span>
+        <span>${esc(dayLabel(d.date))}<span class="tag ${tallyOf(d.driver)[0]}">${esc(TAG[d.driver] || d.driver)}</span>${d.provisional ? `<span class="tag pending">provisional</span>` : ""}${d.macro_share === null || d.macro_share === undefined ? "" : `<span class="tday-share">${Math.round(d.macro_share * 100)}% explained</span>`}</span>
         <span class="tday-move">${signed(d.soxx_pct, 1)}%</span>
         <span class="tday-detail">${esc(d.detail)}${also.length ? ` · also moved: ${esc(also.join(", "))}` : ""}</span>
         ${news}

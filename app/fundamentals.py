@@ -27,12 +27,14 @@ import httpx
 import pandas as pd
 
 from app.config import (
+    CHIPS_EX,
     CYCLE,
     CYCLE_COMPANIES,
     CYCLE_GROUP_HOW,
     CYCLE_GROUP_METRIC,
     CYCLE_HISTORY_QUARTERS,
     CYCLE_TAGS,
+    FUNDING_GROUP,
     SEC_CONCEPT_URL,
     SEC_CONCURRENCY,
     SEC_DEFAULT_USER_AGENT,
@@ -71,6 +73,8 @@ def _needed() -> list[tuple[str, str, str, str]]:
             out.append((group, ticker, cik, CYCLE_GROUP_METRIC[group]))
             if group == "chips":
                 out.append((group, ticker, cik, "eps"))
+            if group == FUNDING_GROUP:
+                out.append((group, ticker, cik, "ocf"))
     return out
 
 
@@ -116,8 +120,10 @@ async def fetch_filings(client: httpx.AsyncClient | None, cache: SecCache, now: 
     """Refresh `cache` in place if it's older than SEC_REFRESH_HOURS. Returns notes."""
     now = now or datetime.now(timezone.utc)
     fetched = cache.get("fetched_at")
-    if fetched and now - datetime.fromisoformat(fetched) < timedelta(hours=SEC_REFRESH_HOURS):
-        return []
+    have = cache.get("companies") or {}
+    complete = all(metric in (have.get(ticker) or {}) for _, ticker, _, metric in _needed())
+    if complete and fetched and now - datetime.fromisoformat(fetched) < timedelta(hours=SEC_REFRESH_HOURS):
+        return []  # a cache written before a series was added refetches at once
     headers = {"User-Agent": os.environ.get("SEC_USER_AGENT") or SEC_DEFAULT_USER_AGENT}
     since = (now - timedelta(days=365 * 6)).date().isoformat()
     companies: dict[str, Any] = cache.setdefault("companies", {})
@@ -248,6 +254,41 @@ def group_growth(series_by_company: dict[str, pd.Series], how: str = "sum") -> p
         else:
             now, before = sum(s[q] for s in ttms.values()), sum(s[q - 4] for s in ttms.values())
             out[q] = (now / before - 1.0) * 100.0
+    return pd.Series(out, dtype=float).sort_index() if out else pd.Series(dtype=float)
+
+
+def single_quarter_growth(series_by_company: dict[str, pd.Series], how: str = "sum") -> pd.Series:
+    """Group growth of ONE quarter vs the same quarter a year earlier (%), where every company has
+    both. Trailing-year growth lags a turn by about two quarters (chips, Q2 2026: 81% trailing,
+    124% on the quarter alone); this is shown beside it, not used in the phase rules."""
+    if not series_by_company:
+        return pd.Series(dtype=float)
+    cqs = {t: by_calendar_quarter(s) for t, s in series_by_company.items()}
+    quarters = sorted(set.intersection(*(set(s.index) for s in cqs.values())))
+    out: dict[pd.Period, float] = {}
+    for q in quarters:
+        if not all((q - 4) in s.index and s[q - 4] > 0 for s in cqs.values()):
+            continue
+        if how == "median":
+            out[q] = float(pd.Series([(s[q] / s[q - 4] - 1.0) * 100.0 for s in cqs.values()]).median())
+        else:
+            out[q] = (sum(s[q] for s in cqs.values()) / sum(s[q - 4] for s in cqs.values()) - 1.0) * 100.0
+    return pd.Series(out, dtype=float).sort_index() if out else pd.Series(dtype=float)
+
+
+def funding_ratio(capex: dict[str, pd.Series], ocf: dict[str, pd.Series]) -> pd.Series:
+    """Group capex as a % of group operating cash flow, trailing twelve months, at each quarter
+    where every company has both. Above 100 the group is spending more than it earns in cash."""
+    if not capex or set(capex) != set(ocf):
+        return pd.Series(dtype=float)
+    c = {t: ttm(by_calendar_quarter(s)) for t, s in capex.items()}
+    o = {t: ttm(by_calendar_quarter(s)) for t, s in ocf.items()}
+    quarters = sorted(set.intersection(*(set(s.index) for s in (*c.values(), *o.values()))))
+    out: dict[pd.Period, float] = {}
+    for q in quarters:
+        cash = sum(s[q] for s in o.values())
+        if cash > 0:
+            out[q] = sum(s[q] for s in c.values()) / cash * 100.0
     return pd.Series(out, dtype=float).sort_index() if out else pd.Series(dtype=float)
 
 
@@ -478,7 +519,11 @@ def earnings_vs_price(
 
 
 def catalysts(
-    r: Readings, q: pd.Period | None, evp: list[dict[str, Any]], effr_minus_bill: float | None
+    r: Readings,
+    q: pd.Period | None,
+    evp: list[dict[str, Any]],
+    effr_minus_bill: float | None,
+    effr_minus_2y: float | None = None,
 ) -> list[Catalyst]:
     out = []
     s = None if q is None else r.at(r.software, q)
@@ -496,19 +541,31 @@ def catalysts(
     else:
         up, n = r.software_breadth.get(q, (0, 0))
         monet = next(c for c in phase_checks(r, q) if c.phase_id == 3)
+        # Two different numbers, which disagreed on the first live reads: the median company's
+        # growth RATE (15.2% -> 14.2% -> 13.6%) fell while the median CHANGE in each company's
+        # growth was positive (+0.64, +0.36), because one large slowdown (Intuit) crossed the
+        # middle. "Starting" needs both to point up; otherwise the read is mixed and says why.
+        s_prev = r.at(r.software, q - 1)
+        level = None if s_prev is None else s - s_prev
         if monet.met is True:
             status, verdict = "yes", "Yes: two quarters running, material and broad"
-        elif a > 0:
+        elif a > 0 and (level is None or level >= 0):
             status, verdict = "starting", "Starting: the typical company is accelerating, not yet decisively"
+        elif a > 0:
+            status, verdict = (
+                "mixed",
+                "Mixed: most companies are edging up, but the group's median growth rate fell",
+            )
         else:
             status, verdict = "not yet", "Not yet: the typical company is slowing"
+        was = "" if s_prev is None else f" (was {_pct(s_prev, 1)})"
         out.append(
             Catalyst(
                 key="software",
                 label="Software revenue accelerating",
                 status=status,
-                detail=f"{verdict}. Median company growth {_pct(s, 1)}, change {_pts(ap)} then {_pts(a)}; "
-                f"{up} of {n} companies accelerating ({qlabel(q)}).",
+                detail=f"{verdict}. Median growth rate {_pct(s, 1)}{was}; the typical company's own growth "
+                f"changed {_pts(ap)} then {_pts(a)}; {up} of {n} companies accelerating ({qlabel(q)}).",
             )
         )
     if not evp:
@@ -532,7 +589,25 @@ def catalysts(
                 detail=f"{len(winners)} of {len(evp)} over the year to {qlabel(q)}: {parts}.",
             )
         )
-    if effr_minus_bill is None:
+    if effr_minus_2y is not None:
+        # The 2Y averages the expected policy rate over two years; the 3-month bill only spans the
+        # next meeting or two and moves with bill supply. Used whenever Treasury's 2Y is in.
+        limit = THRESHOLDS.cuts_2y_spread_pct
+        gap = -effr_minus_2y
+        if gap < -limit:
+            status, detail = "yes", f"Yes: the 2-year yield is {abs(gap):.2f} pts below fed funds."
+        elif gap > limit:
+            status, detail = (
+                "not yet",
+                f"Not yet: the 2-year yield is {gap:+.2f} pts vs fed funds, so hikes are priced.",
+            )
+        else:
+            status, detail = (
+                "not yet",
+                f"Not yet: the 2-year yield is {gap:+.2f} pts vs fed funds, no clear move priced.",
+            )
+        out.append(Catalyst(key="cuts", label="Rate cuts priced", status=status, detail=detail))
+    elif effr_minus_bill is None:
         out.append(Catalyst(key="cuts", label="Rate cuts priced", status="unknown", detail="Rates data unavailable."))
     else:
         priced = effr_minus_bill > THRESHOLDS.cuts_priced_spread_pct
@@ -550,11 +625,17 @@ def catalysts(
 # --- Assembling the cycle ---------------------------------------------------------------------------
 
 
-def build_cycle(cache: SecCache | None, prices: dict[str, pd.Series], effr_minus_bill: float | None) -> Cycle:
+def build_cycle(
+    cache: SecCache | None,
+    prices: dict[str, pd.Series],
+    effr_minus_bill: float | None,
+    effr_minus_2y: float | None = None,
+) -> Cycle:
     companies = (cache or {}).get("companies") or {}
     filings: list[CompanyFiling] = []
     groups: dict[str, dict[str, pd.Series]] = {}
     eps: dict[str, pd.Series] = {}
+    ocf: dict[str, pd.Series] = {}
     notes: list[str] = [str(n) for n in (cache or {}).get("notes") or []]
     for group, members in CYCLE_COMPANIES.items():
         metric = CYCLE_GROUP_METRIC[group]
@@ -585,6 +666,12 @@ def build_cycle(cache: SecCache | None, prices: dict[str, pd.Series], effr_minus
                 eps_slot = (companies.get(ticker) or {}).get("eps") or {}
                 if "facts" in eps_slot:
                     eps[ticker] = quarterize(eps_slot["facts"])
+            if group == FUNDING_GROUP:
+                ocf_slot = (companies.get(ticker) or {}).get("ocf") or {}
+                if "facts" in ocf_slot:
+                    ocf_series = quarterize(ocf_slot["facts"])
+                    if not ocf_series.empty:
+                        ocf[ticker] = ocf_series
 
     complete = {g: len(groups[g]) == len(CYCLE_COMPANIES[g]) for g in groups}
     for g, ok in complete.items():
@@ -624,24 +711,85 @@ def build_cycle(cache: SecCache | None, prices: dict[str, pd.Series], effr_minus
             since, run = row["quarter"], run + 1
     evp = earnings_vs_price(eps, prices, latest) if latest is not None else []
 
+    def single(group: str, members: dict[str, pd.Series]) -> pd.Series:
+        return single_quarter_growth(members, CYCLE_GROUP_HOW[group])
+
+    def make_metric(
+        key: str, label: str, members: list[str], series: pd.Series, one: pd.Series, kind: str
+    ) -> CycleMetric:
+        tail = series.iloc[-CYCLE_HISTORY_QUARTERS:]
+        newest = None if series.empty else pd.Period(str(series.index[-1]), freq="Q")
+        return CycleMetric(
+            key=key,
+            label=label,
+            members=members,
+            kind=kind,
+            latest=None if latest is None or latest not in series.index else round(_val(series, latest), 2),
+            previous=None if latest is None or (latest - 1) not in series.index else round(_val(series, latest - 1), 2),
+            through=qlabel(newest),
+            newest=None if newest is None else round(_val(series, newest), 2),
+            single_quarter=None if newest is None or newest not in one.index else round(_val(one, newest), 2),
+            history=[
+                QuarterValue(quarter=qlabel(pd.Period(str(q), freq="Q")) or "", value=round(float(v), 2))
+                for q, v in tail.items()
+            ],
+        )
+
+    empty = pd.Series(dtype=float)
     metrics = []
     for group, series in (("hyperscalers", r.capex), ("chips", r.chips), ("software", r.software)):
-        tail = series.iloc[-CYCLE_HISTORY_QUARTERS:]
+        one = single(group, groups[group]) if complete[group] else empty
         metrics.append(
-            CycleMetric(
-                key=group,
-                label=GROUP_LABELS[group],
-                members=[t for t, _, _ in CYCLE_COMPANIES[group]],
-                latest=None if latest is None or latest not in series.index else round(_val(series, latest), 2),
-                previous=None
-                if latest is None or (latest - 1) not in series.index
-                else round(_val(series, latest - 1), 2),
-                history=[
-                    QuarterValue(quarter=qlabel(pd.Period(str(q), freq="Q")) or "", value=round(float(v), 2))
-                    for q, v in tail.items()
-                ],
-            )
+            make_metric(group, GROUP_LABELS[group], [t for t, _, _ in CYCLE_COMPANIES[group]], series, one, "growth")
         )
+        if group == "chips" and complete[group]:
+            rest = {t: v for t, v in groups[group].items() if t not in CHIPS_EX}
+            if rest and len(rest) < len(groups[group]):
+                metrics.append(
+                    make_metric(
+                        "chips_ex",
+                        f"Chip revenue without {', '.join(CHIPS_EX)}",
+                        list(rest),
+                        group_growth(rest, "sum"),
+                        single_quarter_growth(rest, "sum"),
+                        "growth",
+                    )
+                )
+    if complete[FUNDING_GROUP]:
+        if set(ocf) == set(groups[FUNDING_GROUP]):
+            metrics.append(
+                make_metric(
+                    "funding",
+                    "Capex as a share of operating cash flow",
+                    list(ocf),
+                    funding_ratio(groups[FUNDING_GROUP], ocf),
+                    empty,
+                    "level",
+                )
+            )
+        elif any("ocf" in (companies.get(t) or {}) for t in groups[FUNDING_GROUP]):
+            lacking = sorted(set(groups[FUNDING_GROUP]) - set(ocf))
+            notes.append(f"Funding gauge: operating cash flow not read yet for {', '.join(lacking)}")
+
+    # Which filings the phase is waiting for: a group's own series can run a quarter ahead of the
+    # quarter every group has (Nov 2026: capex in through Q3, the phase on Q2 until NVDA and AVGO).
+    waiting: list[str] = []
+    if latest is not None:
+        nxt = latest + 1
+        for group in ("hyperscalers", "chips", "software"):
+            for ticker, series in groups[group].items():
+                if nxt not in by_calendar_quarter(series).index:
+                    waiting.append(ticker)
+        ahead = [
+            GROUP_LABELS[g]
+            for g, sr in (("hyperscalers", r.capex), ("chips", r.chips), ("software", r.software))
+            if nxt in sr.index
+        ]
+        if ahead and waiting:
+            notes.append(
+                f"{', '.join(ahead)} already reported through {qlabel(nxt)}. The phase stays on {qlabel(latest)} "
+                f"until {', '.join(waiting)} report."
+            )
 
     met = phases_met(checks)
     pid = phase_id if phase_id is not None else 0
@@ -663,7 +811,8 @@ def build_cycle(cache: SecCache | None, prices: dict[str, pd.Series], effr_minus
         checks=checks,
         metrics=metrics,
         history=history,
-        catalysts=catalysts(r, latest, evp, effr_minus_bill),
+        catalysts=catalysts(r, latest, evp, effr_minus_bill, effr_minus_2y),
+        waiting_on=waiting,
         filings=filings,
         fetched_at=(cache or {}).get("fetched_at"),
         notes=notes,

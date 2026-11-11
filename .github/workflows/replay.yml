@@ -1,0 +1,32 @@
+# Replay the daily stress label over history and score it against SOXX (app/replay.py).
+# Manual only: run it from the Actions tab. It reads data and writes a table to the run summary.
+# It publishes nothing and changes no state. Do not add a `schedule:` block.
+name: Replay stress label
+
+on:
+  workflow_dispatch:
+    inputs:
+      sessions:
+        description: "Sessions to replay"
+        default: "250"
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e .
+      - name: Replay
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+          SESSIONS: ${{ inputs.sessions }}
+        run: python -m app.replay --sessions "$SESSIONS"

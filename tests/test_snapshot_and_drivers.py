@@ -47,16 +47,20 @@ def test_yield_jump_activates_liquidity() -> None:
     assert states(tnx_chg_1d_bps=12.0)["liquidity"] == "ACTIVE"
 
 
-def test_context_metrics_never_trigger() -> None:
-    assert states(vix_chg_1d_pct=40.0, soxx_chg_1d_pct=-6.0) == {
-        "liquidity": "QUIET",
-        "risk_off": "QUIET",
-        "semis": "QUIET",
-    }
+def test_levels_never_trigger() -> None:
+    """VIX above 20 and SOXX RSI below 40 are backdrop: they describe weeks, not the session."""
+    assert states(vix=28.0, soxx_rsi=30.0) == {"liquidity": "QUIET", "risk_off": "QUIET", "semis": "QUIET"}
+
+
+def test_same_session_moves_trigger() -> None:
+    assert states(vix_chg_1d_pct=14.0)["risk_off"] == "ACTIVE"
+    assert states(soxx_return_z=-2.0)["semis"] == "ACTIVE"
+    assert states(soxx_chg_1d_pct=-4.5, soxx_return_z=-1.0)["semis"] == "ACTIVE"  # the floor
+    assert states(soxx_chg_1d_pct=2.1, soxx_return_z=1.4, soxx_rsi=39.0)["semis"] == "QUIET"  # Oct 21: an up day
 
 
 def test_missing_vix_is_unknown_not_quiet() -> None:
-    assert states(vix=None)["risk_off"] == "UNKNOWN"
+    assert states(vix_chg_1d_pct=None)["risk_off"] == "UNKNOWN"
 
 
 def test_day_label_has_no_platform_specific_format() -> None:
@@ -64,33 +68,33 @@ def test_day_label_has_no_platform_specific_format() -> None:
 
 
 def test_diagnosis_dates_the_move_and_names_same_session_drivers() -> None:
-    f = features(vix=24.5, soxx_rsi=35.0, soxx_chg_1d_pct=-3.2, igv_chg_1d_pct=-1.0)
+    f = features(vix_chg_1d_pct=18.0, soxx_chg_1d_pct=-4.6, soxx_return_z=-2.4, igv_chg_1d_pct=-1.0)
     text = diagnose(f, build_drivers(f, {}))
-    assert text.startswith("Semis fell 3.2% on Tue Oct 13; software fell 1.0%.")
-    assert "algorithmic risk-off (VIX 24.5)" in text and "semi momentum breakdown (SOXX RSI 35)" in text
+    assert text.startswith("Semis fell 4.6% on Tue Oct 13; software fell 1.0%.")
+    assert "volatility spike (VIX +18%)" in text and "semis sell-off (SOXX -4.6%, a -2.4σ move)" in text
     assert "liquidity" not in text
 
 
-def test_weak_momentum_on_an_up_day_is_a_bounce_not_a_breakdown() -> None:
+def test_weak_momentum_on_an_up_day_is_backdrop_only() -> None:
     """Oct 21 live read: SOXX +2.1% with RSI 39 was listed as a same-session 'breakdown'."""
     f = features(soxx_rsi=39.0, soxx_chg_1d_pct=2.1, igv_chg_1d_pct=1.8)
     text = diagnose(f, build_drivers(f, {}))
     assert text.startswith("Semis rose 2.1% on Tue Oct 13; software rose 1.8%.")
-    assert "Chip momentum is still weak (SOXX RSI 39, below 40); today's gain was a bounce against it" in text
-    assert "Same-session drivers" not in text and "company or sector news" not in text
+    assert "Nothing unusual moved this session" in text and "RSI" not in text
+    assert "SOXX RSI 39, below 40: chip momentum is weak." in backdrop(f)
 
 
-def test_bounce_keeps_other_same_session_drivers() -> None:
-    f = features(vix=24.5, soxx_rsi=35.0, soxx_chg_1d_pct=1.5)
+def test_a_chips_only_selloff_points_at_chip_news() -> None:
+    f = features(soxx_chg_1d_pct=-5.2, soxx_return_z=-2.8)
     text = diagnose(f, build_drivers(f, {}))
-    assert "Same-session drivers: algorithmic risk-off (VIX 24.5)." in text
-    assert "semi momentum breakdown" not in text and "bounce against it" in text
+    assert "Moved this session: semis sell-off (SOXX -5.2%, a -2.8σ move)." in text
+    assert "look at chip or AI news" in text
 
 
 def test_first_live_read_no_longer_blames_the_level() -> None:
     f = features(tnx_pct=5.22, tnx_pctile=95.0, tnx_chg_1d_bps=-2.3, tnx_delta_z=-0.8, soxx_chg_1d_pct=-2.6)
     text = diagnose(f, build_drivers(f, {}))
-    assert "5.22" not in text and "company or sector news" in text
+    assert "5.22" not in text and "Nothing unusual moved this session" in text
     assert "5.22%" in backdrop(f)
 
 
@@ -134,6 +138,13 @@ def test_preliminary_attached_to_metric() -> None:
 def test_backdrop_policy_lean(effr: float, two_year: float, expected: str) -> None:
     f = features(effr_pct=effr, bill_3m_pct=two_year, effr_minus_3m_pct=effr - two_year)
     assert expected in backdrop(f)
+
+
+def test_backdrop_reads_policy_from_the_two_year_when_it_is_in() -> None:
+    """The 3-month bill spans a meeting or two; the 2Y spans the path."""
+    f = features(effr_pct=3.88, y2_pct=4.55, effr_minus_2y_pct=3.88 - 4.55)
+    text = backdrop(f)
+    assert "2Y at 4.55% vs fed funds 3.88%, which points to hikes, not cuts." in text and "3-month bill" not in text
 
 
 def test_resolve_status_falls_back_to_previous_snapshot(tmp_path: Path, calm_market: dict[str, FetchResult]) -> None:

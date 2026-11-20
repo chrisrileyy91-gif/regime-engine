@@ -17,7 +17,7 @@ records a day later.
 
 | Input | Record (newest wins) | Confirming check | Veto-only check |
 |---|---|---|---|
-| 10Y | Cboe TNX (history + delayed quote; close final 15:00 ET) | Yahoo ^TNX ±0.02 | Treasury par 10Y ±0.10 |
+| 10Y | Cboe TNX (history, else the daily CSV, + delayed quote; close final 15:00 ET) | Yahoo ^TNX ±0.02 | Treasury par 10Y ±0.10 |
 | 3M bill | U.S. Treasury par 3M (posts in the evening) | — | Cboe IRX → bond-equivalent ±0.15 |
 | VIX | Cboe VIX (close final 16:15 ET) | Yahoo ^VIX ±1% | — |
 | EFFR | NY Fed (checked against its own target range) | — | — |
@@ -52,6 +52,14 @@ each pre-split compared date must be either equal or off by exactly the factor, 
 dates are re-based (named in the note). Any other ratio on any date still withholds. Because a mixed
 check could then "agree" with a mixed record, the record itself must not step by the split factor
 between two pre-split closes (same nearest-to-factor rule as the ex-date jump); if it does, withheld.
+
+Cboe host (Nov 20, 2026): `cdn.cboe.com` began redirecting to `cdn-api.cboe.com`, where the
+`charts/historical` endpoint answers 403 for every index (the 06:00 run lost the 10Y, IRX, TYX and
+the intraday highs; VIX survived on its CSV). Every Cboe call now goes to `cdn-api.cboe.com`, and
+every index falls back to its `{SYMBOL}_History.csv` (TNX/TYX/IRX: `DATE,<SYMBOL>`, closes only; VIX:
+OHLC). The quote still supplies the same-day official close. While the history endpoint is down the
+TNX/TYX intraday highs are missing (they only annotate the tally). Each source row on the payload
+carries `details` saying which path it came from.
 
 ## Last resort: Claude web search (`app/claude_fill.py`)
 Runs only when an input's record is MISSING/UNCONFIRMED or a session behind, AND Yahoo has a

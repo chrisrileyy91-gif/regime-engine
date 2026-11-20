@@ -12,9 +12,9 @@ from app.data import (
     fetch_all,
     fetch_krx,
     parse_alpaca_bars,
+    parse_cboe_csv,
     parse_cboe_history,
     parse_cboe_quote,
-    parse_cboe_vix,
     parse_eodhd_eod,
     parse_krx_kospi,
     parse_krx_samsung,
@@ -86,9 +86,19 @@ def test_parse_treasury_missing_column_raises() -> None:
         parse_treasury_csv(['Date,"5 Yr"\n10/09/2026,5.02\n'])
 
 
-def test_parse_cboe_vix() -> None:
-    s = parse_cboe_vix("DATE,OPEN,HIGH,LOW,CLOSE\n10/12/2026,15.1,16.0,14.9,15.21\n10/13/2026,15.2,15.9,15.0,15.27\n")
+def test_parse_cboe_csv_vix() -> None:
+    s = parse_cboe_csv(
+        "DATE,OPEN,HIGH,LOW,CLOSE\n10/12/2026,15.1,16.0,14.9,15.21\n10/13/2026,15.2,15.9,15.0,15.27\n", "VIX"
+    )
     assert s.iloc[-1] == 15.27 and str(s.index[-1].date()) == "2026-10-13"
+
+
+def test_parse_cboe_csv_rates_are_closes_only_and_scaled() -> None:
+    # Shape of TNX_History.csv as served Nov 20, 2026 (DATE,TNX; last row Nov 19 = 50.52).
+    s = parse_cboe_csv("DATE,TNX\n11/18/2026,50.660000\n11/19/2026,50.520000\n", "TNX", 10.0)
+    assert list(s) == pytest.approx([5.066, 5.052]) and str(s.index[-1].date()) == "2026-11-19"
+    with pytest.raises(DataError):
+        parse_cboe_csv("DATE,TYX\n11/19/2026,51.0\n", "TNX", 10.0)
 
 
 # Shapes copied from the live Cboe responses fetched 2026-10-13 (20:37 ET).
@@ -232,18 +242,19 @@ async def test_fetch_all_isolates_failures_and_reports_unconfigured(monkeypatch:
         return_value=httpx.Response(200, json=YAHOO_PAYLOAD)
     )
     respx.get(url__startswith="https://home.treasury.gov/").mock(return_value=httpx.Response(200, text=TREASURY_CSV))
-    respx.get(url__regex=r"https://cdn\.cboe\.com/.*/historical/_TNX\.json").mock(
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*/historical/_TNX\.json").mock(
         return_value=httpx.Response(200, json=history)
     )
-    respx.get(url__regex=r"https://cdn\.cboe\.com/.*/quotes/_TNX\.json").mock(
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*/quotes/_TNX\.json").mock(
         return_value=httpx.Response(200, json=TNX_QUOTE)
     )
-    respx.get(url__regex=r"https://cdn\.cboe\.com/.*/historical/_IRX\.json").mock(return_value=httpx.Response(500))
-    respx.get(url__regex=r"https://cdn\.cboe\.com/.*/historical/_VIX\.json").mock(return_value=httpx.Response(404))
-    respx.get(url__regex=r"https://cdn\.cboe\.com/.*VIX_History\.csv").mock(
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*/historical/_IRX\.json").mock(return_value=httpx.Response(500))
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*IRX_History\.csv").mock(return_value=httpx.Response(500))
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*/historical/_VIX\.json").mock(return_value=httpx.Response(404))
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*VIX_History\.csv").mock(
         return_value=httpx.Response(200, text="DATE,CLOSE\n10/12/2026,15.21\n")
     )
-    respx.get(url__regex=r"https://cdn\.cboe\.com/.*/quotes/_VIX\.json").mock(
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*/quotes/_VIX\.json").mock(
         return_value=httpx.Response(200, json=VIX_QUOTE)
     )
     respx.get(url__startswith="https://markets.newyorkfed.org/").mock(return_value=httpx.Response(404))
@@ -399,3 +410,43 @@ async def test_alpaca_split_lookup_failure_keeps_the_bars(monkeypatch: pytest.Mo
         results = {r.key: r for r in await data.fetch_alpaca(client)}
     soxx = results["soxx@alpaca"]
     assert soxx.ok and soxx.splits == [] and "403" in (soxx.splits_error or "")
+
+
+@respx.mock
+async def test_cboe_history_403_falls_back_to_daily_csv() -> None:
+    """Nov 20, 2026: charts/historical answered 403 for every index; the CSV and quote still answered."""
+    from app.data import fetch_cboe_index, fetch_cboe_tally
+
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*/historical/_.*\.json").mock(return_value=httpx.Response(403))
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*TNX_History\.csv").mock(
+        return_value=httpx.Response(200, text="DATE,TNX\n10/09/2026,52.400000\n10/10/2026,52.300000\n")
+    )
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*TYX_History\.csv").mock(
+        return_value=httpx.Response(200, text="DATE,TYX\n10/09/2026,55.000000\n")
+    )
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*/quotes/_TNX\.json").mock(
+        return_value=httpx.Response(200, json=TNX_QUOTE)
+    )
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*/quotes/_TYX\.json").mock(
+        return_value=httpx.Response(200, json={"data": {"close": 55.5, "last_trade_time": "2026-10-13T13:59:55-05:00"}})
+    )
+    async with httpx.AsyncClient() as client:
+        tnx = await fetch_cboe_index(client, "y10@cboe")
+        tally = {r.key: r for r in await fetch_cboe_tally(client)}
+    assert tnx.ok and tnx.series is not None
+    assert list(tnx.series) == pytest.approx([5.24, 5.23, 5.217])  # CSV closes + the quote's official close
+    assert any("TNX_History.csv" in d for d in tnx.details)
+    y30 = tally["y30@cboe"]
+    assert y30.ok and y30.series is not None and y30.series.iloc[-1] == pytest.approx(5.55)
+    for key in ("y10_high@cboe", "y30_high@cboe"):
+        assert not tally[key].ok and "closes only" in (tally[key].error or ""), key
+
+
+@respx.mock
+async def test_cboe_history_and_csv_both_down_names_both() -> None:
+    from app.data import fetch_cboe_index
+
+    respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*").mock(return_value=httpx.Response(403))
+    async with httpx.AsyncClient() as client:
+        tnx = await fetch_cboe_index(client, "y10@cboe")
+    assert not tnx.ok and "history:" in (tnx.error or "") and "TNX_History.csv" in (tnx.error or "")

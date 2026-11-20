@@ -104,7 +104,15 @@ def build_status(
         telemetry=telemetry(features, {k: v.status.source for k, v in verified.items() if v.series is not None}),
         inputs=features.as_dict(),
         sources=[
-            SourceStatus(key=r.key, symbol=r.symbol, source=r.source, ok=r.ok, last_date=r.last_date, error=r.error)
+            SourceStatus(
+                key=r.key,
+                symbol=r.symbol,
+                source=r.source,
+                ok=r.ok,
+                last_date=r.last_date,
+                error=r.error,
+                details=r.details,
+            )
             for r in results.values()
         ],
         notes=notes,

@@ -5,8 +5,8 @@ one failing source never takes down another. Results are keyed "<input>@<source>
 config.INPUTS); verify.py decides what is trustworthy.
 
 Same-day sources, so the close read is not a session behind:
-  Cboe (10Y TNX, 3M IRX, VIX: history + delayed quote whose close is official after the
-  session) · Alpaca consolidated tape (SOXX, IGV) · NY Fed (EFFR) · EODHD (KOSPI and
+  Cboe (10Y TNX, 3M IRX, VIX: history or daily CSV + delayed quote whose close is official
+  after the session) · Alpaca consolidated tape (SOXX, IGV) · NY Fed (EFFR) · EODHD (KOSPI and
   Samsung end-of-day, posted 2-3h after the Korean close)
 Lagging cross-checks: U.S. Treasury par curve, KRX Open API.
 Same-day cross-check: Yahoo.
@@ -32,11 +32,11 @@ from app.config import (
     ALPACA_BARS_URL,
     ALPACA_CORPORATE_ACTIONS_URLS,
     ALPACA_SIP_MIN_AGE_MINUTES,
+    CBOE_CSV_URL,
     CBOE_HISTORY_URL,
     CBOE_INDEXES,
     CBOE_QUOTE_URL,
     CBOE_TALLY,
-    CBOE_VIX_CSV_URL,
     CYCLE_PRICE_TICKERS,
     EODHD_EOD_SYMBOLS,
     EODHD_EOD_URL,
@@ -248,14 +248,16 @@ def parse_treasury_csv(texts: list[str]) -> dict[str, pd.Series]:
     return out
 
 
-def parse_cboe_vix(text: str) -> pd.Series:
+def parse_cboe_csv(text: str, symbol: str, scale: float = 1.0) -> pd.Series:
+    """Cboe's daily-prices CSV: DATE,OPEN,HIGH,LOW,CLOSE (VIX) or DATE,<SYMBOL> (TNX, TYX, IRX)."""
     frame = pd.read_csv(io.StringIO(text))
-    frame.columns = [c.strip().upper() for c in frame.columns]
-    if "DATE" not in frame.columns or "CLOSE" not in frame.columns:
-        raise DataError("Cboe CSV missing DATE/CLOSE")
+    frame.columns = [str(c).strip().upper() for c in frame.columns]
+    column = "CLOSE" if "CLOSE" in frame.columns else symbol.upper()
+    if "DATE" not in frame.columns or column not in frame.columns:
+        raise DataError(f"Cboe CSV missing DATE/{column}")
     index = pd.to_datetime(frame["DATE"], format="%m/%d/%Y")
-    values = pd.to_numeric(frame["CLOSE"], errors="coerce").to_numpy(dtype=float)
-    return _clean(pd.Series(values, index=index))
+    values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+    return _clean(pd.Series(values / scale, index=index))
 
 
 def parse_nyfed_effr(payload: dict[str, Any]) -> pd.Series:
@@ -362,31 +364,56 @@ async def fetch_treasury(client: httpx.AsyncClient) -> list[FetchResult]:
         ]
 
 
+async def _cboe_daily(
+    client: httpx.AsyncClient, symbol: str, scale: float
+) -> tuple[pd.Series, pd.Series | None, list[str]]:
+    """Daily closes (and highs when available): history endpoint first, then the daily-prices CSV.
+
+    Raises only if both fail. Highs are None when the closes came from the CSV (closes only).
+    """
+    try:
+        payload = (await get_with_retry(client, CBOE_HISTORY_URL.format(symbol=symbol))).json()
+        closes = parse_cboe_history(payload, scale)
+    except Exception as history_exc:
+        try:
+            text = (await get_with_retry(client, CBOE_CSV_URL.format(symbol=symbol))).text
+            closes = parse_cboe_csv(text, symbol, scale)
+        except Exception as csv_exc:
+            raise DataError(f"history: {_error(history_exc)}; {symbol}_History.csv: {_error(csv_exc)}") from csv_exc
+        return closes, None, [f"history from {symbol}_History.csv (history endpoint: {_error(history_exc)})"]
+    try:  # good closes stand even if the highs don't parse
+        return closes, parse_cboe_highs(payload, scale), []
+    except Exception as exc:
+        return closes, None, [f"intraday highs unavailable ({_error(exc)})"]
+
+
+async def _splice_quote(
+    client: httpx.AsyncClient, symbol: str, scale: float, cutoff: str, history: pd.Series, details: list[str]
+) -> pd.Series:
+    """Put the delayed quote's official close on the history once its session is over."""
+    try:
+        close = parse_cboe_quote(
+            (await get_with_retry(client, CBOE_QUOTE_URL.format(symbol=symbol))).json(), scale, cutoff
+        )
+    except Exception as exc:
+        details.append(f"quote unavailable ({_error(exc)})")
+        return history
+    if close is None:
+        details.append("quote not final yet")
+        return history
+    day, value = close
+    details.append(f"official close for {day.date()} from the delayed quote")
+    history = history[history.index != day]
+    spliced: pd.Series = pd.concat([history, pd.Series([value], index=[day])]).sort_index()
+    return spliced
+
+
 async def fetch_cboe_index(client: httpx.AsyncClient, key: str) -> FetchResult:
     symbol, scale, cutoff = CBOE_INDEXES[key]
     details: list[str] = []
     try:
-        try:
-            history = parse_cboe_history(
-                (await get_with_retry(client, CBOE_HISTORY_URL.format(symbol=symbol))).json(), scale
-            )
-        except Exception:
-            if symbol != "VIX":
-                raise
-            history = parse_cboe_vix((await get_with_retry(client, CBOE_VIX_CSV_URL)).text)
-            details.append("history from VIX_History.csv")
-        try:
-            close = parse_cboe_quote(
-                (await get_with_retry(client, CBOE_QUOTE_URL.format(symbol=symbol))).json(), scale, cutoff
-            )
-        except Exception as exc:
-            close = None
-            details.append(f"quote unavailable ({_error(exc)})")
-        if close is not None:
-            day, value = close
-            history = history[history.index != day]
-            history = pd.concat([history, pd.Series([value], index=[day])]).sort_index()
-            details.append(f"official close for {day.date()} from the delayed quote")
+        history, _, details = await _cboe_daily(client, symbol, scale)
+        history = await _splice_quote(client, symbol, scale, cutoff, history, details)
         if key == "t3m@cboe":
             history = history.map(bill_bond_equivalent)
         return FetchResult(key, f"^{symbol}", "cboe", history, details=details)
@@ -397,17 +424,25 @@ async def fetch_cboe_index(client: httpx.AsyncClient, key: str) -> FetchResult:
 async def fetch_cboe_tally(client: httpx.AsyncClient) -> list[FetchResult]:
     """Closes and intraday highs for the tally (10Y high, 30Y close and high). Classification only."""
     out = []
-    for name, (symbol, scale) in CBOE_TALLY.items():
-        keys = [f"{name}_high@cboe"] if name == "y10" else [f"{name}@cboe", f"{name}_high@cboe"]
+    for name, (symbol, scale, cutoff) in CBOE_TALLY.items():
+        close_key, high_key = f"{name}@cboe", f"{name}_high@cboe"
         try:
-            payload = (await get_with_retry(client, CBOE_HISTORY_URL.format(symbol=symbol))).json()
-            series = {
-                f"{name}@cboe": parse_cboe_history(payload, scale),
-                f"{name}_high@cboe": parse_cboe_highs(payload, scale),
-            }
-            out += [FetchResult(k, f"^{symbol}", "cboe", series[k]) for k in keys]
+            closes, highs, details = await _cboe_daily(client, symbol, scale)
         except Exception as exc:
+            keys = [high_key] if name == "y10" else [close_key, high_key]
             out += [FetchResult(k, f"^{symbol}", "cboe", None, _error(exc)) for k in keys]
+            continue
+        if name != "y10":  # the 10Y close is the y10 input itself (fetch_cboe_index)
+            closes = await _splice_quote(client, symbol, scale, cutoff, closes, details)
+            out.append(FetchResult(close_key, f"^{symbol}", "cboe", closes, details=list(details)))
+        if highs is None:
+            from_csv = any(d.startswith("history from") for d in details)
+            reason = "intraday highs unavailable: " + (
+                "history endpoint failed and the daily CSV has closes only" if from_csv else "; ".join(details)
+            )
+            out.append(FetchResult(high_key, f"^{symbol}", "cboe", None, reason, details))
+        else:
+            out.append(FetchResult(high_key, f"^{symbol}", "cboe", highs, details=details))
     return out
 
 

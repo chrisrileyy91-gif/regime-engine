@@ -85,6 +85,7 @@ class SourceStatus(BaseModel):
     ok: bool
     last_date: str | None
     error: str | None
+    details: list[str] = []  # how the value was assembled (fallbacks used, quote state)
 
 
 class QuarterValue(BaseModel):

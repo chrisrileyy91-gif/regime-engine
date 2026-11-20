@@ -94,4 +94,5 @@ today's stress. Plus `cycle` (phase, since, confirmed, checks, metrics, catalyst
 | 21 | Close run at 16:25 | Cboe's feed is 15 minutes delayed, so the 16:15 VIX settle was never in (19 of 19 runs) | 16:40 |
 | 22 | Dollar index from live FX or a web search; fixed "DXY > 104.5" trigger | Without an EODHD key it was a search fill every run, labelled verified | UUP from the consolidated tape; the fixed level trigger is gone; search fills are labelled Filled |
 | 23 | Rate cuts read from the 3-month bill | Spans one or two meetings; moves with bill supply | Treasury 2Y vs fed funds (bill as fallback) |
+| 24 | Cboe `charts/historical` JSON as the only history for TNX/IRX/TYX | Nov 20, 2026: cdn.cboe.com moved to cdn-api.cboe.com and the endpoint answered 403; the 10Y went blank | New host; every index falls back to Cboe's own daily CSV, the quote still gives the same-day close |
 | 10 | Gemini dashboard: composite scores, "Action: NEUTRAL HEDGE", ARR slider | Undefined formulas; ARR has no feed; showed VIX 21 as "stable" | Dropped. Every number on the page traces to a feed and a rule |

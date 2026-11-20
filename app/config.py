@@ -79,11 +79,16 @@ HISTORY_YEARS = 2
 CACHE_TTL_SECONDS = 300  # local API memo only
 
 # --- Source endpoints ------------------------------------------------------------------
-# Cboe: index history (date, close) plus the delayed quote, whose `close` is the official
-# session close once `last_trade_time` passes the index's session end.
-CBOE_HISTORY_URL = "https://cdn.cboe.com/api/global/delayed_quotes/charts/historical/_{symbol}.json"
-CBOE_QUOTE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_{symbol}.json"
-CBOE_VIX_CSV_URL = "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX_History.csv"  # history fallback
+# Cboe: index history (date, OHLC) plus the delayed quote, whose `close` is the official
+# session close once `last_trade_time` passes the index's session end. The daily-prices CSV
+# ({symbol}_History.csv: DATE,CLOSE for VIX; DATE,<SYMBOL> closes only for TNX/TYX/IRX) is the
+# history fallback for every index. Nov 20, 2026: cdn.cboe.com began redirecting to cdn-api.cboe.com,
+# whose charts/historical endpoint answers 403 for every index; quotes and the CSVs still answer
+# there (TNX_History.csv had Nov 19 = 50.52, matching the quote). Called on the new host directly.
+CBOE_HOST = "https://cdn-api.cboe.com"
+CBOE_HISTORY_URL = CBOE_HOST + "/api/global/delayed_quotes/charts/historical/_{symbol}.json"
+CBOE_QUOTE_URL = CBOE_HOST + "/api/global/delayed_quotes/quotes/_{symbol}.json"
+CBOE_CSV_URL = CBOE_HOST + "/api/global/us_indices/daily_prices/{symbol}_History.csv"
 TREASURY_CSV_URL = (
     "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/{year}/all"
 )
@@ -320,7 +325,9 @@ AI_LEVERAGE_TICKERS = ("CRWV", "ORCL", "NBIS")
 # Tally-only Cboe series (official, not cross-checked; classification only). Close-to-close data
 # misses a yield spike that reverses: on CPI day Oct 14 the 10Y rose 11 bps intraday and closed -3.
 # The 30Y catches long-end shocks the 10Y misses (Aug 18: 30Y at its highest since 2007).
-CBOE_TALLY = {"y10": ("TNX", 10.0), "y30": ("TYX", 10.0)}
+# (symbol, scale, quote cutoff in NY time). Intraday highs come only from the history endpoint; the
+# CSV fallback has closes only, so the highs go missing while that endpoint is down (they annotate).
+CBOE_TALLY = {"y10": ("TNX", 10.0, "14:55"), "y30": ("TYX", 10.0, "14:55")}
 
 
 @dataclass(frozen=True)

@@ -60,6 +60,11 @@ every index falls back to its `{SYMBOL}_History.csv` (TNX/TYX/IRX: `DATE,<SYMBOL
 OHLC). The quote still supplies the same-day official close. While the history endpoint is down the
 TNX/TYX intraday highs are missing (they only annotate the tally). Each source row on the payload
 carries `details` saying which path it came from.
+The 16:40 run that day had no same-day 10Y or VIX: the CSV stopped at the prior session and the
+delayed quote also answered 403 from GitHub's runners (it answered from another network), with our
+UA. Cboe requests now carry browser headers (`CBOE_HEADERS`: Chrome UA, Referer/Origin www.cboe.com).
+A call input whose official value is a finished US session behind its confirming copy now makes the
+run DEGRADED ("A session behind: ...") so Pheme alerts; that day the page said OK on stale numbers.
 
 ## Last resort: Claude web search (`app/claude_fill.py`)
 Runs only when an input's record is MISSING/UNCONFIRMED or a session behind, AND Yahoo has a

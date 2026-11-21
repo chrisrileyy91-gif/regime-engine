@@ -450,3 +450,15 @@ async def test_cboe_history_and_csv_both_down_names_both() -> None:
     async with httpx.AsyncClient() as client:
         tnx = await fetch_cboe_index(client, "y10@cboe")
     assert not tnx.ok and "history:" in (tnx.error or "") and "TNX_History.csv" in (tnx.error or "")
+
+
+@respx.mock
+async def test_cboe_calls_carry_the_cboe_headers() -> None:
+    from app.config import CBOE_HEADERS
+    from app.data import fetch_cboe_index
+
+    route = respx.get(url__regex=r"https://cdn-api\.cboe\.com/.*").mock(return_value=httpx.Response(403))
+    async with httpx.AsyncClient(headers={"User-Agent": "other"}) as client:
+        await fetch_cboe_index(client, "vix@cboe")
+    assert route.calls and all(c.request.headers["User-Agent"] == CBOE_HEADERS["User-Agent"] for c in route.calls)
+    assert all(c.request.headers["Referer"] == "https://www.cboe.com/" for c in route.calls)

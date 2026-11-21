@@ -89,6 +89,18 @@ CBOE_HOST = "https://cdn-api.cboe.com"
 CBOE_HISTORY_URL = CBOE_HOST + "/api/global/delayed_quotes/charts/historical/_{symbol}.json"
 CBOE_QUOTE_URL = CBOE_HOST + "/api/global/delayed_quotes/quotes/_{symbol}.json"
 CBOE_CSV_URL = CBOE_HOST + "/api/global/us_indices/daily_prices/{symbol}_History.csv"
+# Browser headers for Cboe only. Nov 20, 2026: from GitHub's runners the delayed quote answered 403
+# with our UA (".. regime-engine/0.3") while the same URL answered from another network; the daily
+# CSV still answered, but only through the prior session, so the 16:40 run had no same-day 10Y/VIX.
+CBOE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.cboe.com/",
+    "Origin": "https://www.cboe.com",
+}
 TREASURY_CSV_URL = (
     "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/{year}/all"
 )

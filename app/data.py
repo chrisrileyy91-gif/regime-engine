@@ -33,6 +33,7 @@ from app.config import (
     ALPACA_CORPORATE_ACTIONS_URLS,
     ALPACA_SIP_MIN_AGE_MINUTES,
     CBOE_CSV_URL,
+    CBOE_HEADERS,
     CBOE_HISTORY_URL,
     CBOE_INDEXES,
     CBOE_QUOTE_URL,
@@ -372,11 +373,11 @@ async def _cboe_daily(
     Raises only if both fail. Highs are None when the closes came from the CSV (closes only).
     """
     try:
-        payload = (await get_with_retry(client, CBOE_HISTORY_URL.format(symbol=symbol))).json()
+        payload = (await get_with_retry(client, CBOE_HISTORY_URL.format(symbol=symbol), headers=CBOE_HEADERS)).json()
         closes = parse_cboe_history(payload, scale)
     except Exception as history_exc:
         try:
-            text = (await get_with_retry(client, CBOE_CSV_URL.format(symbol=symbol))).text
+            text = (await get_with_retry(client, CBOE_CSV_URL.format(symbol=symbol), headers=CBOE_HEADERS)).text
             closes = parse_cboe_csv(text, symbol, scale)
         except Exception as csv_exc:
             raise DataError(f"history: {_error(history_exc)}; {symbol}_History.csv: {_error(csv_exc)}") from csv_exc
@@ -393,7 +394,9 @@ async def _splice_quote(
     """Put the delayed quote's official close on the history once its session is over."""
     try:
         close = parse_cboe_quote(
-            (await get_with_retry(client, CBOE_QUOTE_URL.format(symbol=symbol))).json(), scale, cutoff
+            (await get_with_retry(client, CBOE_QUOTE_URL.format(symbol=symbol), headers=CBOE_HEADERS)).json(),
+            scale,
+            cutoff,
         )
     except Exception as exc:
         details.append(f"quote unavailable ({_error(exc)})")

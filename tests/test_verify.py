@@ -270,3 +270,34 @@ def test_record_rebased_on_only_part_of_its_history_is_withheld() -> None:
 def test_both_sources_already_rebased_is_plain_verified() -> None:
     v = split_check(split_market(ALPACA_ADJUSTED, ALPACA_ADJUSTED))
     assert v.status.status == "VERIFIED" and not any("split" in n for n in v.status.notes)
+
+
+def test_call_input_a_finished_session_behind_degrades_the_run() -> None:
+    """Nov 20, 2026 16:40: 10Y and VIX were Nov 19, Yahoo had Nov 20, and the page said OK."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    record = flat_then(4.0)
+    results = market()
+    results["y10@cboe"] = ok("y10@cboe", record.iloc[:-1])  # record a session behind Yahoo
+    verified = verify_all(results, TODAY_DATE)
+    newest = record.index[-1]
+    ny = ZoneInfo("America/New_York")
+
+    after_close = datetime(newest.year, newest.month, newest.day, 16, 40, tzinfo=ny)
+    quality = assess(verified, after_close)
+    assert quality.status == "DEGRADED" and "A session behind: 10Y Treasury yield." in quality.summary
+    assert any(i.severity == "warn" and "a session behind" in i.message for i in quality.issues)
+
+    # Same day, session still open (a midday manual run): preliminary only, run stays OK.
+    midday = datetime(newest.year, newest.month, newest.day, 11, 0, tzinfo=ny)
+    assert assess(verified, midday).status == "OK"
+    # No clock (pinned-date callers): unchanged behaviour.
+    assert assess(verified).status == "OK"
+
+
+def test_cboe_requests_send_browser_headers() -> None:
+    from app.config import CBOE_HEADERS
+
+    assert "Chrome/" in CBOE_HEADERS["User-Agent"] and "regime-engine" not in CBOE_HEADERS["User-Agent"]
+    assert CBOE_HEADERS["Referer"] == "https://www.cboe.com/"

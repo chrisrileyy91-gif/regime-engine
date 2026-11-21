@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -58,11 +59,13 @@ def build_status(
     sec_cache: SecCache | None = None,
     news: NewsCache | None = None,
 ) -> RegimeStatus:
+    # A live run judges "a session behind" against the clock; a run pinned to a date (tests) doesn't.
+    now_ny = datetime.now(ZoneInfo("America/New_York")) if today is None else None
     today = today or datetime.now(timezone.utc).date()
     verified = verify_all(results, today)
     if fills is not None:
         verified = apply_fills(verified, fills)
-    quality = assess(verified)
+    quality = assess(verified, now_ny)
     if fills is not None:
         for key in fills.fills:
             quality.issues.append(

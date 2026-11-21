@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -37,6 +37,7 @@ from app.config import (
     RECORD_MATCH_TOLERANCE,
     SANITY_BOUNDS,
     SYSTEMATIC_MIN_DAYS,
+    US_SESSION_DONE_NY,
     InputSpec,
 )
 from app.data import FetchResult, Split
@@ -355,8 +356,21 @@ def verify_all(results: dict[str, FetchResult], today: date) -> dict[str, Verifi
     return {key: verify_input(key, spec, results, today) for key, spec in INPUTS.items()}
 
 
-def assess(verified: dict[str, Verified]) -> DataQuality:
+def finished_us_session(day: str, now_ny: datetime) -> bool:
+    """A US session dated `day` is over (its close is final) at `now_ny`."""
+    today = now_ny.date().isoformat()
+    if day != today:
+        return day < today
+    hour, minute = (int(x) for x in US_SESSION_DONE_NY.split(":"))
+    return (now_ny.hour, now_ny.minute) >= (hour, minute)
+
+
+def assess(verified: dict[str, Verified], now_ny: datetime | None = None) -> DataQuality:
+    """`now_ny` (the run's New York time) lets a call input that is a finished session behind its
+    confirming copy degrade the run, so Pheme alerts. Nov 20, 2026 16:40: the 10Y and VIX were
+    Nov 19 while Yahoo had Nov 20 (VIX 35.9, +26%) and the page still said OK."""
     issues: list[QualityIssue] = []
+    behind: list[str] = []
     for v in verified.values():
         s = v.status
         if s.status in ("MISSING", "CONFLICT", "UNCONFIRMED"):
@@ -366,6 +380,22 @@ def assess(verified: dict[str, Verified]) -> DataQuality:
         elif s.stale:
             issues.append(
                 QualityIssue(severity="warn" if s.used_in_call else "info", message=f"{s.label}: {'; '.join(s.notes)}")
+            )
+        elif (
+            s.preliminary is not None
+            and s.used_in_call
+            and now_ny is not None
+            and (s.date is None or s.preliminary.date > s.date)
+            and finished_us_session(s.preliminary.date, now_ny)
+        ):
+            behind.append(s.label)
+            issues.append(
+                QualityIssue(
+                    severity="warn",
+                    message=f"{s.label}: a session behind. Official value is from {s.date}; the "
+                    f"{s.preliminary.date} session is over and {s.preliminary.source} shows "
+                    f"{s.preliminary.value:.4g}, not used until official",
+                )
             )
         elif s.preliminary is not None:
             issues.append(
@@ -378,6 +408,8 @@ def assess(verified: dict[str, Verified]) -> DataQuality:
     call_inputs = [v.status for v in verified.values() if v.status.used_in_call]
     good = [s for s in call_inputs if s.status in ("VERIFIED", "OFFICIAL", "FILLED") and not s.stale]
     verified_count = sum(1 for s in call_inputs if s.status == "VERIFIED")
-    status = "OK" if len(good) == len(call_inputs) else "DEGRADED"
+    status = "OK" if len(good) == len(call_inputs) and not behind else "DEGRADED"
     summary = f"{len(good)} of {len(call_inputs)} call inputs usable, {verified_count} independently confirmed."
+    if behind:
+        summary += f" A session behind: {', '.join(behind)}."
     return DataQuality(status=status, summary=summary, issues=issues, inputs=[v.status for v in verified.values()])

@@ -38,6 +38,7 @@ from app.config import (
     CBOE_INDEXES,
     CBOE_QUOTE_URL,
     CBOE_TALLY,
+    CHIP_PRICE_CHECK_SYMBOLS,
     CYCLE_PRICE_TICKERS,
     EODHD_EOD_SYMBOLS,
     EODHD_EOD_URL,
@@ -660,6 +661,7 @@ async def fetch_all(
             fetch_nyfed(client),
             *(fetch_cboe_index(client, k) for k in CBOE_INDEXES),
             *(fetch_yahoo(client, k, s) for k, s in YAHOO_SYMBOLS.items()),
+            *(fetch_yahoo(client, k, s) for k, s in CHIP_PRICE_CHECK_SYMBOLS.items()),
         )
         groups = await asyncio.gather(
             fetch_treasury(client),

@@ -6,6 +6,8 @@ quarter-end closes; every displayed number is checked against the rows it came f
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 import pytest
 
@@ -15,6 +17,7 @@ from app.fundamentals import (
     RateInputs,
     build_cycle,
     earnings_vs_price,
+    eps_reconciliation,
     implied_multiple_change,
     needed_for,
     quarterize,
@@ -25,7 +28,7 @@ from app.models import Catalyst
 from tests.sec_fixture import sec_cache
 
 Q = pd.Period
-IDX = pd.bdate_range("2023-01-02", "2026-07-31")
+IDX = pd.bdate_range("2023-01-02", "2026-10-30")
 
 
 def step_prices(growth_pct: float, before: str = "2025-06-30") -> pd.Series:
@@ -35,8 +38,19 @@ def step_prices(growth_pct: float, before: str = "2025-06-30") -> pd.Series:
     return s
 
 
-# Price growth on the live page, year to Q2 2026.
-LIVE_PRICES = {"NVDA": step_prices(27), "AVGO": step_prices(37), "AMD": step_prices(309), "MU": step_prices(837)}
+# Price growth on the live page for the year to Q2 2026. In the fixture (filings to Oct 14, 2026)
+# Micron's latest filing is already Q3 2026 (quarter ended Sep 3), so its step sits at Sep 30, 2025,
+# sized to keep its implied multiple at +17.9% on its Q3 trailing EPS (7.60 -> 74.27).
+LIVE_PRICES = {
+    "NVDA": step_prices(27),
+    "AVGO": step_prices(37),
+    "AMD": step_prices(309),
+    "MU": step_prices((74.27 / 7.60) * 1.179 * 100 - 100, "2025-09-30"),
+}
+
+
+# The same, all pinned to the year to Q2 2026 (for rows read at a fixed quarter).
+Q2_PRICES = {"NVDA": step_prices(27), "AVGO": step_prices(37), "AMD": step_prices(309), "MU": step_prices(837)}
 
 
 def chip_eps() -> dict[str, pd.Series]:
@@ -104,7 +118,7 @@ def test_unreadable_company_is_unknown_not_false() -> None:
 
 
 def test_rows_reconcile_to_eps_and_prices() -> None:
-    rows = earnings_vs_price(chip_eps(), LIVE_PRICES, Q("2026Q2"), ["NVDA", "AVGO", "AMD", "MU"])
+    rows = earnings_vs_price(chip_eps(), Q2_PRICES, Q("2026Q2"), ["NVDA", "AVGO", "AMD", "MU"])
     by = {r["ticker"]: r for r in rows}
     assert by["NVDA"]["eps_then"] == pytest.approx(3.52, abs=0.005) and by["NVDA"]["eps_now"] == pytest.approx(7.91)
     for r in rows:
@@ -181,11 +195,13 @@ def test_semiconductor_card_matches_the_live_read() -> None:
     assert c.status == "mixed" and c.status_text == "Mixed" and c.headline == "2 of 4"
     assert c.observation and c.observation.startswith("2 of 4 semiconductor companies")
     assert c.interpretation and "remains significant in parts of the group (AMD +82.9%)" in c.interpretation
-    assert "MU's EPS rose 7.9x from a low base" in c.interpretation
+    assert "MU's EPS rose 9.8x from a low base" in c.interpretation
+    assert "different quarters" in c.interpretation
     assert c.confirmation and c.confirmation.startswith("At least 3 of 4") and "Closest: MU" in c.confirmation
-    assert "Q3 2026" in c.confirmation
+    assert "files its next 10-Q or 10-K" in c.confirmation
+    assert [r["quarter"] for r in c.rows] == ["Q2 2026", "Q2 2026", "Q2 2026", "Q3 2026"]
     labels = [m.label for m in c.methodology]
-    assert {"Measured", "Latest fiscal quarter", "EPS", "Price", "Formula", "Limits", "Updated"} <= set(labels)
+    assert {"Measured", "Latest filings", "EPS", "Price", "Checks", "Formula", "Limits", "Updated"} <= set(labels)
     eps_note = next(m.value for m in c.methodology if m.label == "EPS")
     assert "GAAP diluted" in eps_note and "No adjusted EPS" in eps_note
 
@@ -200,7 +216,8 @@ def test_every_displayed_number_reconciles_to_its_row() -> None:
         assert bar.tone == row["band"]
     led = sum(1 for r in c.rows if r["outgrowing"])
     assert c.headline == f"{led} of {len(c.rows)}"
-    assert f"{c.rows[0]['ticker']} EPS {c.rows[0]['eps_growth']:+.0f}%" in c.detail
+    first = c.rows[0]
+    assert f"{first['ticker']} ({first['quarter']}) EPS {first['eps_growth']:+.0f}%" in c.detail
 
 
 def test_card_turns_unknown_when_a_company_cannot_be_read() -> None:
@@ -229,7 +246,7 @@ def test_software_card_separates_company_and_group() -> None:
     assert f"{up} of {len(c.rows)} accelerating" in (c.headline_note or "")
     assert c.observation and c.observation.startswith("Group: the median company's revenue growth")
     assert "Companies:" in c.observation
-    assert c.confirmation and "Monetization needs all three" in c.confirmation
+    assert c.confirmation and c.confirmation.startswith("All three")
     for bar, row in zip(c.bars, c.rows, strict=True):
         assert bar.value == pytest.approx(row["change"], abs=1e-3)
         assert bar.tone == ("up" if row["change"] > 0 else "down")
@@ -282,3 +299,124 @@ def test_gap_sessions_ago_uses_effr_as_of_that_day() -> None:
     got = gap_sessions_ago(effr, y2, THRESHOLDS.cuts_change_sessions)
     assert got is not None and got[0] == str(days[9].date()) and got[1] == pytest.approx(4.10 - 4.09)
     assert gap_sessions_ago(effr, y2.iloc[:5], 20) is None
+
+
+# --- each company through its own latest filing (Nov 2026) ------------------------------------------
+
+
+def eps_facts(
+    quarters: list[tuple[str, str, float]], filed: dict[str, str], form: str = "10-Q"
+) -> list[dict[str, Any]]:
+    return [
+        {"start": start, "end": end, "val": val, "form": form, "filed": filed.get(end, "2099-01-01")}
+        for start, end, val in quarters
+    ]
+
+
+QUARTERS = [  # calendar quarters Q3 2024 .. Q3 2026, EPS 1.00 a quarter, then 2.00
+    ("2024-07-01", "2024-09-30", 1.0),
+    ("2024-10-01", "2024-12-31", 1.0),
+    ("2025-01-01", "2025-03-31", 1.0),
+    ("2025-04-01", "2025-06-30", 1.0),
+    ("2025-07-01", "2025-09-30", 1.0),
+    ("2025-10-01", "2025-12-31", 2.0),
+    ("2026-01-01", "2026-03-31", 2.0),
+    ("2026-04-01", "2026-06-30", 2.0),
+    ("2026-07-01", "2026-09-30", 2.0),
+]
+
+
+def test_each_company_reads_its_own_latest_quarter_with_its_filing_date() -> None:
+    raw = eps_facts(QUARTERS, {"2026-09-30": "2026-11-04", "2026-06-30": "2026-08-05"})
+    newer = quarterize(raw)
+    older = quarterize(raw[:-1])  # this company hasn't filed Q3 yet
+    rows = earnings_vs_price(
+        {"NEW": newer, "OLD": older},
+        {"NEW": step_prices(50, "2025-09-30"), "OLD": step_prices(50, "2025-06-30")},
+        None,
+        ["NEW", "OLD"],
+        facts={"NEW": {"eps": raw}, "OLD": {"eps": raw[:-1]}},
+    )
+    new, old = rows
+    assert new["quarter"] == "Q3 2026" and old["quarter"] == "Q2 2026"
+    assert new["asof"] == "As of 11/4/2026 earnings (10-Q, quarter ended 9/30/2026)"
+    assert old["asof"] == "As of 8/5/2026 earnings (10-Q, quarter ended 6/30/2026)"
+    assert new["eps_growth"] == pytest.approx(100.0) and new["price_growth"] == pytest.approx(50.0)
+    assert old["eps_growth"] == pytest.approx((7 / 4 - 1) * 100)  # TTM to Q2 2026: 1+2+2+2 vs 4
+
+
+def test_filing_date_is_the_first_filing_not_a_later_restatement() -> None:
+    raw = eps_facts(QUARTERS, {"2026-09-30": "2026-11-04"})
+    raw.append({**raw[-1], "filed": "2027-02-20", "form": "10-K"})  # re-reported in the next annual report
+    row = earnings_vs_price({"X": quarterize(raw)}, {"X": step_prices(50, "2025-09-30")}, facts={"X": {"eps": raw}})[0]
+    assert row["filed"] == "2026-11-04" and "11/4/2026" in row["asof"]
+
+
+def _consistent(eps: float, shares: float, start: str, end: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    base = {"start": start, "end": end, "form": "10-Q", "filed": "2026-11-04"}
+    return {**base, "val": eps * shares}, {**base, "val": shares}
+
+
+def test_eps_reconciles_with_net_income_and_shares() -> None:
+    raw = eps_facts(QUARTERS, {})
+    income, shares = zip(*(_consistent(v, 1e9, s, e) for s, e, v in QUARTERS), strict=True)
+    status, n, note = eps_reconciliation(
+        raw, list(income), list(shares), pd.Timestamp("2024-12-31"), pd.Timestamp("2026-09-30")
+    )
+    assert status == "reconciled" and n == 8 and note is None  # Q4 2024 on: the two trailing years
+
+
+def test_eps_that_does_not_reconcile_withholds_the_company() -> None:
+    raw = eps_facts(QUARTERS, {})
+    income, shares = (list(x) for x in zip(*(_consistent(v, 1e9, s, e) for s, e, v in QUARTERS), strict=True))
+    income[-1] = {**income[-1], "val": 1.0e9}  # filing says $1B net income, but EPS 2.00 x 1B shares = $2B
+    facts = {"X": {"eps": raw, "net_income": income, "diluted_shares": shares}}
+    row = earnings_vs_price({"X": quarterize(raw)}, {"X": step_prices(50, "2025-09-30")}, facts=facts)[0]
+    assert row["eps_check"] == "failed" and row["outgrowing"] is None
+    assert "doesn't reconcile" in row["reason"] and "$2.00B vs net income $1.00B" in row["reason"]
+
+
+def test_cent_rounding_on_small_eps_is_not_a_failure() -> None:
+    """EPS is rounded to the cent: 0.03 x 1.6B shares = $48M against $44M reported is rounding."""
+    raw = eps_facts([("2026-07-01", "2026-09-30", 0.03)], {})
+    income = [{**raw[0], "val": 44e6}]
+    shares = [{**raw[0], "val": 1.6e9}]
+    status, n, _ = eps_reconciliation(raw, income, shares, pd.Timestamp("2026-01-01"), pd.Timestamp("2026-12-31"))
+    assert status == "reconciled" and n == 1
+
+
+def test_missing_net_income_or_shares_is_unchecked_not_failed() -> None:
+    raw = eps_facts(QUARTERS, {})
+    status, n, _ = eps_reconciliation(raw, [], None, pd.Timestamp("2024-01-01"), pd.Timestamp("2026-12-31"))
+    assert status == "unchecked" and n == 0
+
+
+def test_price_check_against_yahoo() -> None:
+    eps = {"X": quarterize(eps_facts(QUARTERS, {}))}
+    alpaca = step_prices(50, "2025-09-30")
+    agree = alpaca * 1.001
+    row = earnings_vs_price(eps, {"X": alpaca}, price_checks={"X": agree})[0]
+    assert row["price_check"] == "verified" and row["outgrowing"] is not None
+
+    differ = alpaca.copy()
+    differ[differ.index == "2026-09-30"] = 160.0  # Alpaca 150
+    row = earnings_vs_price(eps, {"X": alpaca}, price_checks={"X": differ})[0]
+    assert row["price_check"] == "conflict" and row["outgrowing"] is None
+    assert "Alpaca 150.00 vs Yahoo 160.00 on Sep 30, 2026" in row["reason"]
+
+    gap = alpaca[alpaca.index != "2026-09-30"]
+    row = earnings_vs_price(eps, {"X": alpaca}, price_checks={"X": gap})[0]
+    assert row["price_check"] == "official" and row["outgrowing"] is not None  # used, labelled unconfirmed
+    assert "Yahoo has no close for Sep 30, 2026" in row["price_check_note"]
+
+
+def test_software_rows_each_on_their_own_latest_filing() -> None:
+    from app.fundamentals import software_latest
+
+    facts = sec_cache()["companies"]
+    members = {t: quarterize(facts[t]["revenue"]["facts"]) for t in ("CRM", "ADBE")}
+    rows = software_latest(members, ["CRM", "ADBE", "WDAY"])
+    by = {r["ticker"]: r for r in rows}
+    assert by["CRM"]["quarter"] == "Q2 2026" and by["ADBE"]["quarter"] == "Q3 2026"
+    assert by["ADBE"]["change"] == pytest.approx(by["ADBE"]["growth"] - by["ADBE"]["growth_prev"], abs=1e-3)
+    assert by["WDAY"]["reason"] == "no revenue filings read"

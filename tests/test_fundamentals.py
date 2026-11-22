@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 import respx
 
-from app.config import CYCLE_COMPANIES, SEC_CONCEPT_URL
+from app.config import CYCLE_COMPANIES, EPS_CHECK_METRICS, SEC_CONCEPT_URL
 from app.fundamentals import (
     build_cycle,
     by_calendar_quarter,
@@ -124,10 +124,13 @@ def test_software_acceleration_just_short_of_the_line() -> None:
     accel = next(c for c in monet.conditions if "two quarters" in c.name)
     assert accel.met is False and "total +0.992" in accel.threshold
     software = next(c for c in cycle.catalysts if c.key == "software")
-    # The median growth RATE fell (14.2% -> 13.6%) while the median CHANGE was +0.36: the page used
-    # to print "starting to accelerate" beside a falling number. It now says both.
-    assert software.status == "mixed"
+    # The card reads each company through its own latest filing (Nov 2026): Adobe's quarter ending
+    # Aug 29 is already Q3, which lifts the typical company's earlier change to +0.68 (total 1.04),
+    # so the card meets the same thresholds the phase (on the common Q2) misses by 0.008. It still
+    # prints the falling median growth RATE beside it, and names the quarters.
+    assert software.status == "yes"
     assert "Median growth rate 13.6% (was 14.2%)" in software.detail and "+0.36 pts" in software.detail
+    assert "Q3 2026: ADBE" in software.detail
 
 
 def test_each_series_is_dated_on_its_own_and_shows_the_single_quarter() -> None:
@@ -235,6 +238,9 @@ async def test_fetch_skipped_when_fresh() -> None:
     cache = sec_cache(fetched_at="2026-10-15T00:00:00+00:00")
     for ticker, _, _ in CYCLE_COMPANIES["hyperscalers"]:
         cache["companies"][ticker]["ocf"] = {"error": "none yet"}
+    for ticker, _, _ in CYCLE_COMPANIES["chips"]:
+        for metric in EPS_CHECK_METRICS:
+            cache["companies"][ticker][metric] = {"error": "none yet"}
     assert await fetch_filings(None, cache, datetime(2026, 10, 15, 10, tzinfo=timezone.utc)) == []
 
 

@@ -231,6 +231,17 @@ def parse_eodhd_eod(rows: list[dict[str, Any]]) -> pd.Series:
     return _clean(pd.Series(values.to_numpy(dtype=float), index=index))
 
 
+# Treasury par curve columns read. The 6M and 1Y (Nov 2026) give the rate-cut catalyst its
+# market-implied path between the 3M bill and the 2Y; like the 2Y they are official, not cross-checked.
+TREASURY_COLUMNS = (
+    ("y10@treasury", "10 Yr"),
+    ("t3m@treasury", "3 Mo"),
+    ("y6m@treasury", "6 Mo"),
+    ("y1@treasury", "1 Yr"),
+    ("y2@treasury", "2 Yr"),
+)
+
+
 def parse_treasury_csv(texts: list[str]) -> dict[str, pd.Series]:
     frames = [pd.read_csv(io.StringIO(t)) for t in texts if t.strip()]
     if not frames:
@@ -241,8 +252,8 @@ def parse_treasury_csv(texts: list[str]) -> dict[str, pd.Series]:
             raise DataError(f"Treasury CSV missing column {column!r}")
     index = pd.to_datetime(frame["Date"], format="%m/%d/%Y")
     out = {}
-    for key, column in (("y10@treasury", "10 Yr"), ("t3m@treasury", "3 Mo"), ("y2@treasury", "2 Yr")):
-        if column not in frame.columns:  # the 2Y is tally-only; its absence must not break the 10Y/3M
+    for key, column in TREASURY_COLUMNS:
+        if column not in frame.columns:  # 6M/1Y/2Y are extras; their absence must not break the 10Y/3M
             continue
         values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
         out[key] = _clean(pd.Series(values, index=index))
@@ -359,10 +370,7 @@ async def fetch_treasury(client: httpx.AsyncClient) -> list[FetchResult]:
         parsed = parse_treasury_csv(texts)
         return [FetchResult(k, k.split("@")[0].upper(), "treasury", s) for k, s in parsed.items()]
     except Exception as exc:
-        return [
-            FetchResult(k, k.split("@")[0].upper(), "treasury", None, _error(exc))
-            for k in ("y10@treasury", "t3m@treasury", "y2@treasury")
-        ]
+        return [FetchResult(k, k.split("@")[0].upper(), "treasury", None, _error(exc)) for k, _ in TREASURY_COLUMNS]
 
 
 async def _cboe_daily(

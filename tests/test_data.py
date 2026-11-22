@@ -81,6 +81,13 @@ def test_parse_treasury_two_years_sorted() -> None:
     assert out["t3m@treasury"].iloc[-1] == 4.25
 
 
+def test_parse_treasury_reads_the_six_month_and_one_year() -> None:
+    text = 'Date,"3 Mo","6 Mo","1 Yr","2 Yr","10 Yr"\n11/20/2026,4.32,4.40,4.50,4.63,4.91\n'
+    out = parse_treasury_csv([text])
+    assert float(out["y6m@treasury"].iloc[-1]) == 4.40 and float(out["y1@treasury"].iloc[-1]) == 4.50
+    assert "y6m@treasury" not in parse_treasury_csv([TREASURY_CSV])  # absent column: skipped, not an error
+
+
 def test_parse_treasury_missing_column_raises() -> None:
     with pytest.raises(DataError):
         parse_treasury_csv(['Date,"5 Yr"\n10/09/2026,5.02\n'])
@@ -301,11 +308,17 @@ def test_krx_candidate_dates_skip_weekends() -> None:
 
 
 @respx.mock
-async def test_treasury_failure_reports_both_keys() -> None:
+async def test_treasury_failure_reports_every_key() -> None:
     respx.get(url__startswith="https://home.treasury.gov/").mock(return_value=httpx.Response(404))
     async with httpx.AsyncClient() as client:
         results = await data.fetch_treasury(client)
-    assert sorted(r.key for r in results) == ["t3m@treasury", "y10@treasury", "y2@treasury"]
+    assert sorted(r.key for r in results) == [
+        "t3m@treasury",
+        "y10@treasury",
+        "y1@treasury",
+        "y2@treasury",
+        "y6m@treasury",
+    ]
     assert not any(r.ok for r in results)
 
 

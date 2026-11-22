@@ -64,6 +64,7 @@ class Thresholds:
     # --- Rate-cut catalyst ---------------------------------------------------------------------
     cuts_priced_spread_pct: float = 0.10  # 3M bill below EFFR by more than this = cuts priced (fallback)
     cuts_2y_spread_pct: float = 0.25  # 2Y below EFFR by more than this = cuts priced over two years
+    cuts_change_sessions: int = 20  # "change in expectations": the 2Y gap vs this many Treasury days ago
 
     rsi_period: int = 14
 
@@ -355,6 +356,34 @@ class CycleThresholds:
 
 
 CYCLE = CycleThresholds()
+
+
+@dataclass(frozen=True)
+class ValuationThresholds:
+    """Semiconductor earnings vs. valuation (a "How we go up" catalyst). All UNCALIBRATED.
+
+    Implied multiple change = (1 + price growth) / (1 + EPS growth) - 1, trailing year: the change in
+    trailing P/E the two growth rates imply. Bands classify its size; the group score counts direction
+    only (EPS growth above price growth), so a company can be "stable" and still count.
+    """
+
+    contraction_pct: float = -10.0  # implied multiple change at or below this = earnings-led (green)
+    expansion_pct: float = 10.0  # above this = multiple expansion (amber); between = stable (neutral)
+    significant_pct: float = 40.0  # at or above this = significant multiple expansion (red)
+    # EPS at least this many times its year-earlier level = growth from a low base: the multiple read
+    # leans on a depressed starting year (MU, Q2 2026: trailing EPS 5.56 -> 44.18, x7.9).
+    low_base_eps_ratio: float = 3.0
+    # Group grade: share of the companies with EPS growth above price growth (spec: 0-1 of 4 Weak,
+    # 2 Mixed, 3 Confirming, 4 Strong). Highest step first.
+    grades: tuple[tuple[float, str], ...] = ((1.0, "strong"), (0.75, "confirming"), (0.5, "mixed"), (0.0, "weak"))
+    confirming_grade: str = "confirming"  # the grade the "confirmation required" line asks for
+    # Quarter-end closes must fall this close to the calendar quarter end, or the price is missing.
+    price_date_tolerance_days: int = 7
+    # The two fiscal quarters compared must end a year apart (52/53-week years drift a week).
+    fiscal_year_tolerance_days: int = 21
+
+
+VALUATION = ValuationThresholds()
 
 # --- Daily layer -------------------------------------------------------------------------------
 TALLY_DROP_PCT = -1.5  # a "big down day" for semis

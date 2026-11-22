@@ -13,8 +13,8 @@ from app.claude_fill import FillReport, apply_fills
 from app.config import AI_LEVERAGE_TICKERS, CYCLE_PRICE_TICKERS, TALLY_TICKERS
 from app.data import FetchResult, fetch_all
 from app.drivers import backdrop, build_drivers, diagnose
-from app.features import build_features
-from app.fundamentals import SecCache, build_cycle
+from app.features import MarketFeatures, build_features
+from app.fundamentals import RateInputs, SecCache, build_cycle
 from app.models import Condition, QualityIssue, RegimeStatus, SourceStatus
 from app.news import NewsCache
 from app.regime import _any, telemetry
@@ -37,6 +37,27 @@ def chip_prices(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
     return out
 
 
+def rate_inputs(f: MarketFeatures) -> RateInputs:
+    """Fed funds and the Treasury path (3M, 6M, 1Y, 2Y) for the rate-cut catalyst, each dated."""
+    points = tuple(
+        (label, value, f.dates[key])
+        for label, value, key in (
+            ("3M", f.bill_3m_pct, "t3m"),
+            ("6M", f.y6m_pct, "y6m"),
+            ("1Y", f.y1_pct, "y1"),
+            ("2Y", f.y2_pct, "y2"),
+        )
+        if value is not None and key in f.dates
+    )
+    return RateInputs(
+        effr=f.effr_pct,
+        effr_date=f.dates.get("effr"),
+        points=points,
+        gap_2y_prev=f.effr_minus_2y_prev_pct,
+        prev_date=f.dates.get("y2_prev"),
+    )
+
+
 def tally_extras(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
     """Official series that aren't cross-checked inputs: the equal-weight S&P 500, oil, the dollar,
     high-yield bonds and the debt-funded AI names (consolidated tape); Cboe's intraday highs and
@@ -44,6 +65,7 @@ def tally_extras(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
     keys = {name: f"{ticker.lower()}@alpaca" for name, ticker in TALLY_TICKERS.items()}
     keys.update({f"lev_{t.lower()}": f"{t.lower()}@alpaca" for t in AI_LEVERAGE_TICKERS})
     keys.update({"y10_high": "y10_high@cboe", "y30": "y30@cboe", "y30_high": "y30_high@cboe", "y2": "y2@treasury"})
+    keys.update({"y6m": "y6m@treasury", "y1": "y1@treasury"})
     out = {}
     for name, key in keys.items():
         r = results.get(key)
@@ -75,7 +97,13 @@ def build_status(
     extras = tally_extras(results)
     features = build_features(verified, extras)
     drivers = build_drivers(features, {k: v.status for k, v in verified.items()})
-    cycle = build_cycle(sec_cache, chip_prices(results), features.effr_minus_3m_pct, features.effr_minus_2y_pct)
+    cycle = build_cycle(
+        sec_cache,
+        chip_prices(results),
+        features.effr_minus_3m_pct,
+        features.effr_minus_2y_pct,
+        rate_inputs(features),
+    )
     day = build_today(features, drivers, verified, extras)
     squeeze = _any(
         [

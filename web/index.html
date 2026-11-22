@@ -150,6 +150,33 @@
   .status.yes { background: var(--low-soft); color: var(--low); }
   .status.starting, .status.mixed { background: var(--moderate-soft); color: var(--moderate); }
   .status.not-yet { background: var(--unknown-soft); color: var(--ink-2); }
+  .status.strong, .status.confirming { background: var(--low-soft); color: var(--low); }
+  .status.weak { background: var(--unknown-soft); color: var(--ink-2); }
+  .cat-head-num { margin-top: 6px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .cat-num { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+  .cat-num-note { font-size: 13px; color: var(--ink-2); }
+  .cbars { margin-top: 8px; display: grid; gap: 7px; }
+  .cb { display: grid; grid-template-columns: 3.4em 1fr 5.2em; column-gap: 8px; align-items: center; }
+  .cb-label { font-size: 13px; font-weight: 700; }
+  .cb-track { position: relative; height: 10px; background: var(--track); border-radius: 3px; }
+  .cb-track::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--ink-3); }
+  .cb-fill { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: currentColor; }
+  .cb-val { font-size: 13px; font-weight: 700; text-align: right; }
+  .cb-sub { grid-column: 1 / -1; font-size: 12px; color: var(--ink-3); line-height: 1.35; }
+  .cb-tag { font-weight: 600; }
+  .tone-earnings { color: var(--low); } .tone-stable { color: var(--ink-2); } .tone-expansion { color: var(--moderate); }
+  .tone-significant { color: var(--high); } .tone-up { color: var(--p3); } .tone-down { color: var(--ink-3); }
+  .tone-neutral { color: var(--rates); } .tone-unknown { color: var(--unknown); }
+  .cb-note { margin-top: 6px; font-size: 12px; color: var(--ink-3); }
+  details.cat-more { margin-top: 8px; }
+  details.cat-more > summary { cursor: pointer; font-size: 13.5px; font-weight: 600; color: var(--ink-2); }
+  .layers { margin: 8px 0 0; display: grid; gap: 8px; }
+  .layers dt { font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+  .layers dd { margin: 1px 0 0; font-size: 13.5px; color: var(--ink-2); }
+  .method { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--rule); }
+  .method dl { margin: 4px 0 0; display: grid; gap: 5px; }
+  .method dt { font-size: 12px; font-weight: 700; color: var(--ink-2); }
+  .method dd { margin: 0; font-size: 12px; color: var(--ink-3); }
 
   /* cycle metrics */
   .metrics-card { margin-top: 12px; padding: 2px 14px; }
@@ -314,7 +341,7 @@
 
     <section>
       <h2>How we go up</h2>
-      <p class="lede">The three things that end the "valuations questioned" loop.</p>
+      <p class="lede">The three things that end the "valuations questioned" loop: are fundamentals improving, are valuations running ahead of them, and what would confirm a healthier market. Observations, not buy or sell signals.</p>
       <div class="card cats" id="catalysts"></div>
     </section>
 
@@ -404,7 +431,7 @@
   const tallyOf = (k) => TALLY[k] || TALLY.unknown;
   const NEWS = { company: "Company news", ai_demand: "AI-demand worries", policy: "Policy", analyst: "Analyst calls", macro_data: "Economic data", fed: "The Fed", geopolitics: "Geopolitics/oil", none_clear: "Nothing clear", unlabelled: "Not read yet" };
   const TAG = { rates: "yields jumped", oil: "oil", dollar: "dollar", fear: "VIX", market: "broad market", credit: "credit (high-yield bonds)", rotation: "rotation", chips: "chips alone", unknown: "unknown" };
-  const CAT_TEXT = { yes: "Yes", starting: "Starting", mixed: "Mixed", "not yet": "Not yet", unknown: "Unknown" };
+  const CAT_TEXT = { yes: "Yes", starting: "Starting", mixed: "Mixed", "not yet": "Not yet", unknown: "Unknown", strong: "Strong", confirming: "Confirming", weak: "Weak" };
   const SCHEDULE_NY = ["06:00", "16:40"];  // mirrors meridian-clock schedule.json
   const GRACE_MINUTES = 60;
   const STATUS_TEXT = { VERIFIED: "Verified", OFFICIAL: "Official", FILLED: "Filled", CONFLICT: "Withheld", UNCONFIRMED: "Withheld", MISSING: "Unavailable" };
@@ -414,6 +441,36 @@
   const dayLabel = (iso) => iso ? new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" }) : "";
   const fullDate = (iso) => iso ? new Date(`${iso}T12:00:00Z`).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" }) : "";
   const signed = (v, d = 1) => `${v >= 0 ? "+" : ""}${v.toFixed(d)}`;
+
+  // "How we go up": a diverging bar per row (zero in the middle), scaled to the largest value.
+  const TONES = ["earnings", "stable", "expansion", "significant", "up", "down", "neutral", "unknown"];
+  function catBars(c) {
+    const bars = c.bars || [];
+    if (!bars.length) return "";
+    const scale = Math.max(1e-9, ...bars.map((b) => Math.abs(b.value ?? 0)));
+    const rows = bars.map((b) => {
+      const tone = TONES.includes(b.tone) ? b.tone : "unknown";
+      const v = b.value;
+      let fill = "";
+      if (v !== null && v !== undefined) {
+        const w = Math.max((Math.abs(v) / scale) * 50, 0.8);
+        fill = `<i class="cb-fill tone-${tone}" style="left:${v < 0 ? 50 - w : 50}%;width:${w}%"></i>`;
+      }
+      const sub = [b.tag ? `<span class="cb-tag tone-${tone}">${esc(b.tag)}</span>` : "", b.sub ? esc(b.sub) : ""].filter(Boolean).join(" · ");
+      return `<div class="cb"><span class="cb-label">${esc(b.label)}</span><span class="cb-track">${fill}</span>
+        <span class="cb-val tone-${tone}">${esc(b.text)}</span>${sub ? `<span class="cb-sub">${sub}</span>` : ""}</div>`;
+    }).join("");
+    return `<div class="cbars">${rows}</div>${c.bars_note ? `<p class="cb-note">${esc(c.bars_note)}</p>` : ""}`;
+  }
+  function catDetails(c) {
+    const layers = [["Observation", c.observation], ["Interpretation", c.interpretation], ["Confirmation required", c.confirmation]]
+      .filter(([, text]) => text).map(([name, text]) => `<dt>${name}</dt><dd>${esc(text)}</dd>`).join("");
+    const method = (c.methodology || []).map((m) => `<dt>${esc(m.label)}</dt><dd>${esc(m.value)}</dd>`).join("");
+    if (!layers && !method) return "";
+    return `<details class="cat-more"><summary>See details</summary>
+      ${layers ? `<dl class="layers">${layers}</dl>` : ""}
+      ${method ? `<div class="method"><span class="mini-label">Methodology and data</span><dl>${method}</dl></div>` : ""}</details>`;
+  }
 
   function fmt(value, unit) {
     if (value === null || value === undefined) return "n/a";
@@ -551,8 +608,10 @@
 
     $("catalysts").innerHTML = (cycle.catalysts || []).map((c) => `
       <div class="cat"><div class="cat-head"><span class="cat-name">${esc(c.label)}</span>
-        <span class="status ${esc(c.status.replace(" ", "-"))}">${esc(CAT_TEXT[c.status] || c.status)}</span></div>
-        <p class="cat-detail">${esc(c.detail)}</p></div>`).join("");
+        <span class="status ${esc(c.status.replace(" ", "-"))}">${esc(c.status_text || CAT_TEXT[c.status] || c.status)}</span></div>
+        ${c.headline ? `<div class="cat-head-num"><span class="cat-num">${esc(c.headline)}</span><span class="cat-num-note">${esc(c.headline_note)}</span></div>` : `<p class="cat-detail">${esc(c.detail)}</p>`}
+        ${catBars(c)}
+        ${catDetails(c)}</div>`).join("");
 
     $("cycle-metrics").innerHTML = (cycle.metrics || []).map((m) => {
       const h = m.history || [];

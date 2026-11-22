@@ -121,11 +121,39 @@ class CycleMetric(BaseModel):
     history: list[QuarterValue] = []
 
 
+class CatalystBar(BaseModel):
+    """One row of a catalyst's chart: a value drawn from a zero line, with its number beside it."""
+
+    label: str  # ticker or horizon
+    value: float | None = None  # what the bar draws (None = no bar)
+    text: str  # the number shown
+    tone: str = "neutral"  # earnings / stable / expansion / significant / up / down / neutral / unknown
+    tag: str | None = None  # classification, shown under the label
+    sub: str | None = None  # the inputs behind the number
+
+
+class CatalystNote(BaseModel):
+    label: str
+    value: str
+
+
 class Catalyst(BaseModel):
     key: str
     label: str
-    status: str  # yes / starting / mixed / not yet / unknown
-    detail: str
+    status: str  # yes / starting / mixed / not yet / unknown; earnings: strong / confirming / mixed / weak
+    detail: str  # one-line summary (logs, older pages)
+    status_text: str | None = None  # the pill's text when the status word alone would mislead
+    headline: str | None = None  # primary number
+    headline_note: str | None = None
+    bars: list[CatalystBar] = []
+    bars_note: str | None = None
+    # Three layers, written from the numbers each run (never stored prose): what the data shows,
+    # what it suggests, and what would have to happen before it counts as confirmed.
+    observation: str | None = None
+    interpretation: str | None = None
+    confirmation: str | None = None
+    methodology: list[CatalystNote] = []
+    rows: list[dict[str, Any]] = []  # the numbers behind the bars, so every displayed figure reconciles
     news: dict[str, Any] | None = None  # {category, summary, evidence[{headline, url, time}], confidence}
     news_flag: str | None = None  # headlines and gauges disagree
 

@@ -25,7 +25,7 @@ records a day later.
 | KOSPI, Samsung | EODHD end-of-day (2–3h after close) → KRX Open API (next day) | Yahoo ±0.1% | — |
 | Company filings | SEC EDGAR XBRL companyconcept (each company's own 10-Q/10-K) | — | entity-name check per CIK |
 | Chip stock prices | Alpaca SIP quarter-end closes (earnings-vs-price catalyst only) | — | — |
-| Official, not cross-checked | Cboe TNX/TYX daily high and TYX close; Treasury 2Y; Alpaca SIP RSP, USO (oil), UUP (dollar), HYG (credit), CRWV/ORCL/NBIS (debt-funded AI names, own request) | — | — |
+| Official, not cross-checked | Cboe TNX/TYX daily high and TYX close; Treasury 2Y, 6M, 1Y; Alpaca SIP RSP, USO (oil), UUP (dollar), HYG (credit), CRWV/ORCL/NBIS (debt-funded AI names, own request) | — | — |
 | Headlines | Benzinga via Alpaca news API (same keys), labelled by Claude from the list only | cited ids must exist | — |
 
 Statuses: **VERIFIED** (a confirming source has the same date and agrees) · **OFFICIAL**
@@ -146,10 +146,26 @@ software group it alone faked an acceleration on the first real read.
   each of the last two quarters, totalling ≥ 1.0 pt · at least half the companies accelerating.
   Can overlap Buildout or Digestion; when it does it is the headline and `phases_met` shows both.
 - `since` = first quarter of the current run; `confirmed` after 2 consecutive quarters.
-- Catalysts: software ("starting" needs the median growth RATE not falling as well as a positive
-  median CHANGE; when they disagree it reads "mixed" and prints both), chip earnings vs chip prices
-  (TTM EPS vs price, year to the latest quarter), rate cuts (Treasury 2Y vs EFFR, ±0.25; the 3M
-  bill is the fallback when the 2Y is missing).
+- Catalysts ("How we go up"; Nov 22, 2026 rework). Each carries Observation / Interpretation /
+  Confirmation required, written from the numbers every run (never stored prose), plus
+  `methodology` notes and `rows` (the numbers behind every bar, so the page reconciles). The page
+  shows name, status, headline number and bars; the layers and methodology sit under "See details".
+  - Software revenue accelerating: unchanged rule ("starting" needs the median growth RATE not
+    falling as well as a positive median CHANGE; when they disagree it reads "mixed"). Bars are each
+    company's own change in growth; the headline is the group (median company).
+  - Semiconductor earnings vs. valuation (key `earnings`): TTM diluted GAAP EPS vs the last close
+    on or before each calendar quarter end (within 7 days), year to the latest quarter. Implied
+    multiple change = (1 + price growth) / (1 + EPS growth) − 1 (a proxy for the trailing P/E change).
+    Bands (`VALUATION`): ≤ −10% earnings-led, to +10% stable, to +40% expansion, ≥ +40% significant.
+    Score counts direction only (EPS growth > price growth): 0–1 of 4 weak, 2 mixed, 3 confirming,
+    4 strong. A company that can't be compared (no filings, base EPS ≤ 0, no close near the quarter
+    end, fiscal quarters not a year apart) stays in the group as unknown; the grade is "unknown"
+    when it would change depending on how that company went (Kleene). EPS turning negative counts
+    against (no multiple). EPS up 3x or more is flagged "low base" (MU, Q2 2026: x7.9).
+  - Monetary easing expectations (key `cuts`): status rule unchanged (Treasury 2Y vs EFFR, ±0.25;
+    the 3M bill is the fallback). Beside it: the Treasury path 3M/6M/1Y/2Y minus EFFR, and the 2Y gap
+    20 Treasury days earlier. Market pricing is kept apart from policy (an FOMC cut = EFFR falling).
+    Fed funds futures/OIS are not read: no official free record to verify them against.
 - Shown beside the phase, never in its rules: each series through its OWN newest quarter, that
   quarter alone vs a year earlier (a trailing year turns ~2 quarters late: chips Q2 2026 were 81%
   trailing, 124% on the quarter), chip revenue without MU (memory pricing), and the funding gauge:
@@ -259,6 +275,10 @@ software group it alone faked an acceleration on the first real read.
   include year-end adjustments; Q4 EPS derived this way is approximate (share counts differ).
 - Old EPS facts are not split-adjusted unless a later filing restated them; the earnings catalyst
   only uses the latest two years, which are post-split for NVDA and AVGO. Watch for new splits.
+- The valuation bands, the low-base ratio and the score grades are judgment calls (uncalibrated).
+  The chip score counts companies, not market cap (MU weighs as much as NVDA). Normalized or
+  mid-cycle earnings are not estimated. A contracting multiple can mean earnings did the work or
+  that the market doubts them; the gauge can't tell which.
 - Group membership is a judgment call (who counts as "software"). Changing it changes the read.
 - Headlines are one feed (Benzinga) and Claude's label is a reading of them, not a fact. The cited
   headlines are shown so every label can be checked; a wrong label shows up as a mismatch with them.

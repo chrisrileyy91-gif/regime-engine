@@ -10,7 +10,7 @@ import pandas as pd
 
 from app.cache import SnapshotStore
 from app.claude_fill import FillReport, apply_fills
-from app.config import AI_LEVERAGE_TICKERS, CYCLE_PRICE_TICKERS, TALLY_TICKERS
+from app.config import AI_LEVERAGE_TICKERS, CHIP_PRICE_CHECK_SYMBOLS, CYCLE_PRICE_TICKERS, TALLY_TICKERS
 from app.data import FetchResult, fetch_all
 from app.drivers import backdrop, build_drivers, diagnose
 from app.features import MarketFeatures, build_features
@@ -32,6 +32,16 @@ def chip_prices(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
     out = {}
     for ticker in CYCLE_PRICE_TICKERS:
         r = results.get(f"{ticker.lower()}@alpaca")
+        if r is not None and r.series is not None and not r.series.empty:
+            out[ticker] = r.series
+    return out
+
+
+def chip_price_checks(results: dict[str, FetchResult]) -> dict[str, pd.Series]:
+    """Yahoo's copies of the chip closes (the confirming check for the earnings card)."""
+    out = {}
+    for key, ticker in CHIP_PRICE_CHECK_SYMBOLS.items():
+        r = results.get(key)
         if r is not None and r.series is not None and not r.series.empty:
             out[ticker] = r.series
     return out
@@ -103,6 +113,7 @@ def build_status(
         features.effr_minus_3m_pct,
         features.effr_minus_2y_pct,
         rate_inputs(features),
+        chip_price_checks(results),
     )
     day = build_today(features, drivers, verified, extras)
     squeeze = _any(

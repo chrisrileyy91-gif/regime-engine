@@ -130,6 +130,7 @@ class CatalystBar(BaseModel):
     tone: str = "neutral"  # earnings / stable / expansion / significant / up / down / neutral / unknown
     tag: str | None = None  # classification, shown under the label
     sub: str | None = None  # the inputs behind the number
+    asof: str | None = None  # which filing the row comes from ("As of 11/19/2026 earnings (10-Q for Q3 2026)")
 
 
 class CatalystNote(BaseModel):

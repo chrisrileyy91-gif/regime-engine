@@ -35,6 +35,8 @@ from app.config import (
     CYCLE_GROUP_METRIC,
     CYCLE_HISTORY_QUARTERS,
     CYCLE_TAGS,
+    CYCLE_UNITS,
+    EPS_CHECK_METRICS,
     FUNDING_GROUP,
     SEC_CONCEPT_URL,
     SEC_CONCURRENCY,
@@ -86,6 +88,7 @@ def _needed() -> list[tuple[str, str, str, str]]:
             out.append((group, ticker, cik, CYCLE_GROUP_METRIC[group]))
             if group == "chips":
                 out.append((group, ticker, cik, "eps"))
+                out.extend((group, ticker, cik, m) for m in EPS_CHECK_METRICS)
             if group == FUNDING_GROUP:
                 out.append((group, ticker, cik, "ocf"))
     return out
@@ -119,7 +122,7 @@ async def _fetch_series(
         if not entity.startswith(expected):
             return {"error": f"CIK {cik} is {entity!r}, expected {expected!r}"}
         units = data.get("units") or {}
-        facts = units.get("USD/shares" if metric == "eps" else "USD") or []
+        facts = units.get(CYCLE_UNITS.get(metric, "USD")) or []
         facts = _slim(facts, since)
         if not facts:
             continue
@@ -635,23 +638,121 @@ def needed_for(grade: str, total: int, t: ValuationThresholds = VALUATION) -> in
     return next(k for k in range(total + 1) if k / total >= step - 1e-9)
 
 
+def _first_filed(facts: list[dict[str, Any]] | None, end: pd.Timestamp | None) -> tuple[str, str] | None:
+    """(filing date, form) of the first 10-Q/10-K that reported a period ending `end`: when the
+    figure first became public in a filing."""
+    if not facts or end is None:
+        return None
+    key = str(end.date())
+    hits = [
+        (str(f.get("filed") or ""), str(f.get("form") or ""))
+        for f in facts
+        if str(f.get("end")) == key and str(f.get("form", "")).startswith(("10-Q", "10-K")) and f.get("filed")
+    ]
+    return min(hits) if hits else None
+
+
+def _md(day: str | pd.Timestamp) -> str:
+    """11/19/2026 (no %-d: it breaks on Windows)."""
+    d = pd.Timestamp(str(day))
+    return f"{d.month}/{d.day}/{d.year}"
+
+
+def _asof(filed: tuple[str, str] | None, fiscal_end: pd.Timestamp | None) -> str:
+    """'As of 11/19/2026 earnings (10-Q, quarter ended 10/26/2026)': the filing the row comes from."""
+    ended = "" if fiscal_end is None else f", quarter ended {_md(fiscal_end)}"
+    if filed is None:
+        return f"Filing date not read{ended.replace(', q', ' (q', 1) + ')' if ended else ''}"
+    return f"As of {_md(filed[0])} earnings ({filed[1].split('/')[0]}{ended})"
+
+
+def _latest_by_period(facts: list[dict[str, Any]] | None) -> dict[tuple[str, str], float]:
+    """Each (start, end) once, from the latest 10-Q/10-K that reported it (restatements win)."""
+    out: dict[tuple[str, str], tuple[float, str]] = {}
+    for f in facts or []:
+        if not str(f.get("form", "")).startswith(("10-Q", "10-K")):
+            continue
+        try:
+            key, val = (str(f["start"]), str(f["end"])), float(f["val"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        filed = str(f.get("filed") or "")
+        if key not in out or filed > out[key][1]:
+            out[key] = (val, filed)
+    return {k: v for k, (v, _) in out.items()}
+
+
+def eps_reconciliation(
+    eps_facts: list[dict[str, Any]] | None,
+    net_income_facts: list[dict[str, Any]] | None,
+    share_facts: list[dict[str, Any]] | None,
+    first_end: pd.Timestamp,
+    last_end: pd.Timestamp,
+    t: ValuationThresholds = VALUATION,
+) -> tuple[str, int, str | None]:
+    """Check each diluted EPS figure against its own filing: EPS x diluted weighted shares should
+    equal net income for the same period, within `eps_check_pct` of net income or rounding to the
+    cent on the share count, whichever is larger. Every period (quarter, year-to-date, full year)
+    ending between `first_end` and `last_end` that has all three facts is checked.
+
+    Returns ("reconciled" | "unchecked" | "failed", periods checked, the first failure).
+    """
+    eps, income, shares = (_latest_by_period(f) for f in (eps_facts, net_income_facts, share_facts))
+    checked = 0
+    for (start, end), value in sorted(eps.items()):
+        if not first_end <= pd.Timestamp(end) <= last_end or (start, end) not in income or (start, end) not in shares:
+            continue
+        n, s = income[(start, end)], shares[(start, end)]
+        implied = value * s
+        checked += 1
+        if abs(implied - n) > max(t.eps_check_pct / 100.0 * abs(n), t.eps_check_cents * s):
+            return (
+                "failed",
+                checked,
+                f"{_day(start)} to {_day(end)}: EPS {value:.2f} x {s / 1e6:,.0f}M diluted shares = "
+                f"${implied / 1e9:,.2f}B vs net income ${n / 1e9:,.2f}B",
+            )
+    return ("reconciled" if checked else "unchecked"), checked, None
+
+
+def _check_close(check: pd.Series | None, day: str, value: float, tolerance_pct: float) -> tuple[str, str | None]:
+    """An Alpaca close against Yahoo's close for the same date: verified / official (no copy) / conflict."""
+    if check is None or check.empty:
+        return "official", "no Yahoo copy"
+    same = check[pd.DatetimeIndex(check.index).normalize() == pd.Timestamp(day)].dropna()
+    if same.empty:
+        return "official", f"Yahoo has no close for {_day(day)}"
+    other = float(same.iloc[-1])
+    if value > 0 and abs(other / value - 1.0) * 100.0 <= tolerance_pct:
+        return "verified", None
+    return "conflict", f"Alpaca {value:.2f} vs Yahoo {other:.2f} on {_day(day)}"
+
+
 def earnings_vs_price(
     eps_by_company: dict[str, pd.Series],
     prices: dict[str, pd.Series],
-    q: pd.Period,
+    q: pd.Period | None = None,
     tickers: list[str] | None = None,
     t: ValuationThresholds = VALUATION,
+    *,
+    price_checks: dict[str, pd.Series] | None = None,
+    facts: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
 ) -> list[dict[str, Any]]:
-    """One row per company: trailing-year diluted EPS growth vs share-price growth, year to `q`.
+    """One row per company: trailing-year diluted EPS growth vs share-price growth.
 
+    Each company is read through its OWN latest filing (`q` None), or at calendar quarter `q`.
     EPS: the sum of four fiscal quarters mapped to calendar quarters `q-3..q`, vs `q-7..q-4`.
-    Price: the last close on or before each calendar quarter end. A company that can't be compared
-    stays in the list with `outgrowing` None and the reason, so a gap never shrinks the group.
+    Price: the last close on or before each calendar quarter end, checked against Yahoo when a copy
+    is given. `facts` (raw EDGAR facts per metric) supply the filing date and the EPS check. A
+    company that can't be compared stays in the list with `outgrowing` None and the reason.
     """
     out: list[dict[str, Any]] = []
+    price_checks = price_checks or {}
+    facts = facts or {}
     for ticker in tickers if tickers is not None else list(eps_by_company):
         row: dict[str, Any] = {
             "ticker": ticker,
+            "quarter": None,
             "eps_growth": None,
             "price_growth": None,
             "multiple_change": None,
@@ -659,6 +760,11 @@ def earnings_vs_price(
             "band": "unknown",
             "low_base": False,
             "reason": None,
+            "filed": None,
+            "form": None,
+            "asof": None,
+            "price_check": None,
+            "eps_check": None,
         }
         out.append(row)
         eps = eps_by_company.get(ticker)
@@ -666,29 +772,61 @@ def earnings_vs_price(
             row["reason"] = "no EPS filings read"
             continue
         cq_ttm = ttm(by_calendar_quarter(eps))
-        if q not in cq_ttm.index or (q - 4) not in cq_ttm.index:
-            row["reason"] = f"no trailing-year EPS for both {qlabel(q)} and {qlabel(q - 4)}"
+        qc = q if q is not None else (max(cq_ttm.index) if len(cq_ttm.index) else None)
+        if qc is None or qc not in cq_ttm.index or (qc - 4) not in cq_ttm.index:
+            row["reason"] = "no trailing-year EPS for both years" + ("" if qc is None else f" to {qlabel(qc)}")
             continue
-        end_now, end_then = _fiscal_end(eps, q), _fiscal_end(eps, q - 4)
+        row["quarter"] = qlabel(qc)
+        end_now, end_then = _fiscal_end(eps, qc), _fiscal_end(eps, qc - 4)
         row["fiscal_end"] = None if end_now is None else str(end_now.date())
         row["fiscal_end_then"] = None if end_then is None else str(end_then.date())
+        company = facts.get(ticker) or {}
+        filed = _first_filed(company.get("eps"), end_now)
+        if filed is not None:
+            row["filed"], row["form"] = filed
+        row["asof"] = _asof(filed, end_now)
         if end_now is None or end_then is None or abs((end_now - end_then).days - 365) > t.fiscal_year_tolerance_days:
             row["reason"] = (
                 f"fiscal quarters ending {_day(end_then)} and {_day(end_now)} aren't a year apart; "
                 "the two years can't be compared"
             )
             continue
-        eps_now, eps_then = _val(cq_ttm, q), _val(cq_ttm, q - 4)
+        eps_now, eps_then = _val(cq_ttm, qc), _val(cq_ttm, qc - 4)
         row["eps_now"], row["eps_then"] = round(eps_now, 4), round(eps_then, 4)
+        if company:
+            status, n, note = eps_reconciliation(
+                company.get("eps"),
+                company.get("net_income"),
+                company.get("diluted_shares"),
+                end_then - pd.Timedelta(days=300),
+                end_now,
+                t,
+            )
+            row["eps_check"], row["eps_checked_periods"] = status, n
+            if status == "failed":
+                row["reason"] = f"EPS doesn't reconcile with its own filing ({note}); withheld"
+                continue
         price = prices.get(ticker)
-        now_close = _close_near(price, q.end_time.normalize(), t.price_date_tolerance_days)
-        then_close = _close_near(price, (q - 4).end_time.normalize(), t.price_date_tolerance_days)
+        now_close = _close_near(price, qc.end_time.normalize(), t.price_date_tolerance_days)
+        then_close = _close_near(price, (qc - 4).end_time.normalize(), t.price_date_tolerance_days)
         if now_close is None or then_close is None:
-            missing = _day((q if now_close is None else q - 4).end_time.normalize())
+            missing = _day((qc if now_close is None else qc - 4).end_time.normalize())
             row["reason"] = f"no {ticker} close within {t.price_date_tolerance_days} days of {missing}"
             continue
         row["price_date"], row["price_now"] = now_close[0], round(now_close[1], 4)
         row["price_date_then"], row["price_then"] = then_close[0], round(then_close[1], 4)
+        if ticker in price_checks:
+            checks = [_check_close(price_checks[ticker], d, v, t.price_check_pct) for d, v in (now_close, then_close)]
+            states = {s for s, _ in checks}
+            row["price_check"] = (
+                "conflict" if "conflict" in states else ("verified" if states == {"verified"} else "official")
+            )
+            notes = [n for _, n in checks if n]
+            if notes:
+                row["price_check_note"] = "; ".join(notes)
+            if row["price_check"] == "conflict":
+                row["reason"] = f"price check failed ({row['price_check_note']}); withheld"
+                continue
         if eps_then <= 0:
             row["reason"] = "year-earlier EPS was zero or negative, so growth and the multiple aren't defined"
             continue
@@ -708,12 +846,38 @@ def earnings_vs_price(
     return out
 
 
+def _by_quarter(rows: list[dict[str, Any]]) -> str:
+    """'Q3 2026: NVDA, AMD and MU; Q2 2026: AVGO' (newest first)."""
+    groups: dict[str, list[str]] = defaultdict(list)
+    for r in rows:
+        if r.get("quarter"):
+            groups[str(r["quarter"])].append(str(r["ticker"]))
+
+    def order(label: str) -> pd.Period:
+        quarter, year = label.split()
+        return pd.Period(f"{year}{quarter}", freq="Q")
+
+    return "; ".join(f"{label}: {_names(groups[label])}" for label in sorted(groups, key=order, reverse=True))
+
+
+def _check_text(r: dict[str, Any]) -> str:
+    price = {"verified": "price verified", "official": "price not cross-checked", "conflict": "price conflict"}.get(
+        str(r.get("price_check")), "price not checked"
+    )
+    eps = {
+        "reconciled": f"EPS reconciled ({r.get('eps_checked_periods', 0)} periods)",
+        "unchecked": "EPS not reconcilable (net income or shares not in the filing data)",
+        "failed": "EPS failed reconciliation",
+    }.get(str(r.get("eps_check")), "EPS not checked")
+    return f"{r['ticker']}: {price}, {eps}"
+
+
 def _earnings_catalyst(
-    rows: list[dict[str, Any]], q: pd.Period | None, fetched_at: str | None, t: ValuationThresholds = VALUATION
+    rows: list[dict[str, Any]], fetched_at: str | None, t: ValuationThresholds = VALUATION
 ) -> Catalyst:
     label = "Semiconductor earnings vs. valuation"
     readable = [r for r in rows if r["outgrowing"] is not None]
-    if q is None or not readable:
+    if not readable:
         reasons = "; ".join(f"{r['ticker']}: {r['reason']}" for r in rows if r.get("reason"))
         return Catalyst(
             key="earnings",
@@ -728,7 +892,7 @@ def _earnings_catalyst(
     led = [r for r in rows if r["outgrowing"] is True]
     unknown = [r for r in rows if r["outgrowing"] is None]
     grade = valuation_grade(len(led), len(unknown), total, t)
-    ql = qlabel(q)
+    quarters = _by_quarter(rows)
 
     def mult(r: dict[str, Any]) -> str:
         return "n/a" if r["multiple_change"] is None else f"{r['multiple_change']:+.1f}%"
@@ -746,11 +910,20 @@ def _earnings_catalyst(
         if r["outgrowing"] is False and r["multiple_change"] is None:
             tag, tone = "EPS fell below zero", "significant"
         bars.append(
-            CatalystBar(label=r["ticker"], value=r["multiple_change"], text=mult(r), tone=tone, tag=tag, sub=sub)
+            CatalystBar(
+                label=r["ticker"],
+                value=r["multiple_change"],
+                text=mult(r),
+                tone=tone,
+                tag=tag,
+                sub=sub,
+                asof=r.get("asof"),
+            )
         )
 
-    detail = f"{len(led)} of {total} over the year to {ql}: " + ", ".join(
-        f"{r['ticker']} EPS {r['eps_growth']:+.0f}% vs price {r['price_growth']:+.0f}% (multiple {mult(r)})"
+    detail = f"{len(led)} of {total}, each through its latest filing: " + ", ".join(
+        f"{r['ticker']} ({r['quarter']}) EPS {r['eps_growth']:+.0f}% vs price {r['price_growth']:+.0f}% "
+        f"(multiple {mult(r)})"
         if r["eps_growth"] is not None
         else f"{r['ticker']} n/a"
         for r in rows
@@ -759,8 +932,8 @@ def _earnings_catalyst(
     # Observation: what the data shows.
     measured = [r for r in rows if r["multiple_change"] is not None]
     observation = (
-        f"{len(led)} of {total} semiconductor companies grew trailing EPS faster than their share price "
-        f"over the year to {ql}."
+        f"{len(led)} of {total} semiconductor companies grew trailing EPS faster than their share price over "
+        f"their latest reported year ({quarters})."
     )
     if len(measured) >= 2:
         lo = min(measured, key=lambda r: r["multiple_change"])
@@ -816,6 +989,8 @@ def _earnings_catalyst(
     memory = [r["ticker"] for r in rows if r["ticker"] in CHIPS_EX]
     if memory:
         interpretation += f" {_names(memory)} earnings swing with memory prices (cyclical)."
+    if len({r.get("quarter") for r in rows if r.get("quarter")}) > 1:
+        interpretation += " The companies sit on different quarters, so each is compared against its own year."
 
     # Confirmation required: the next grade's bar, and who is closest to moving.
     need = needed_for(t.confirming_grade, total, t)
@@ -838,28 +1013,40 @@ def _earnings_catalyst(
             )
         if unknown:
             confirmation += f" {_names([r['ticker'] for r in unknown])} must also become comparable."
-    confirmation += f" Next read: once every chip company has reported {qlabel(q + 1)}."
+    confirmation += " Each company's row updates when it files its next 10-Q or 10-K."
 
     price_days = sorted({(r["price_date_then"], r["price_date"]) for r in rows if r.get("price_date")})
     used = "; ".join(f"{_day(a)} and {_day(b)}" for a, b in price_days) or "none"
-    ends = " · ".join(f"{r['ticker']} {_day(r['fiscal_end'])}" for r in rows if r.get("fiscal_end")) or "n/a"
+    filings = (
+        " · ".join(
+            f"{r['ticker']} fiscal quarter ended {_day(r['fiscal_end'])}"
+            + (f", {r['form']} filed {_day(r['filed'])}" if r.get("filed") else "")
+            for r in rows
+            if r.get("fiscal_end")
+        )
+        or "n/a"
+    )
     methodology = [
         CatalystNote(
             label="Measured",
-            value=f"Trailing-12-month EPS vs share price, year to {ql}. Each fiscal quarter counts in the "
-            "nearest calendar quarter.",
+            value="Each company through its own latest filing: trailing-12-month EPS vs share price over the same "
+            f"year ({quarters}). Each fiscal quarter counts in the nearest calendar quarter.",
         ),
-        CatalystNote(label="Latest fiscal quarter", value=ends),
+        CatalystNote(label="Latest filings", value=filings),
         CatalystNote(
             label="EPS",
             value="GAAP diluted (EarningsPerShareDiluted), the sum of four fiscal quarters, from each "
-            "company's own 10-Q/10-K at SEC EDGAR. No adjusted EPS is read or mixed in.",
+            "company's own 10-Q/10-K at SEC EDGAR. No adjusted EPS is read or mixed in. Each figure used is "
+            "checked against its filing: EPS x diluted shares must match net income within "
+            f"{t.eps_check_pct:.0f}% (or cent rounding); a failure withholds the company.",
         ),
         CatalystNote(
             label="Price",
             value=f"Alpaca consolidated-tape closes, split-adjusted: the last close on or before each calendar "
-            f"quarter end, within {t.price_date_tolerance_days} days. Closes used: {used}.",
+            f"quarter end, within {t.price_date_tolerance_days} days, checked against Yahoo's close for the same "
+            f"date (±{t.price_check_pct}%; a disagreement withholds the company). Closes used: {used}.",
         ),
+        CatalystNote(label="Checks", value=" · ".join(_check_text(r) for r in rows)),
         CatalystNote(
             label="Formula",
             value="Implied multiple change = (1 + price growth) / (1 + EPS growth) - 1. A proxy for the change "
@@ -874,10 +1061,12 @@ def _earnings_catalyst(
         ),
         CatalystNote(
             label="Limits",
-            value="A price can sit up to about five weeks before the fiscal quarter it is compared with. Each "
-            "trailing year includes one fiscal Q4 worked out as full year minus nine months (share counts "
-            f"differ, so approximate). EPS up {t.low_base_eps_ratio:.0f}x or more is flagged as a low base; "
-            "normalized mid-cycle earnings are not estimated.",
+            value="The as-of date is the 10-Q/10-K filing, which can trail the earnings call by days to a few "
+            "weeks; press releases aren't machine-readable. A price can sit up to about five weeks before the "
+            "fiscal quarter it is compared with. Each trailing year includes one fiscal Q4 worked out as full "
+            f"year minus nine months (approximate). EPS up {t.low_base_eps_ratio:.0f}x or more is flagged as a "
+            "low base; normalized mid-cycle earnings are not estimated. The phase checklist sums dollars "
+            "across companies, so it still waits for every company to report the same quarter.",
         ),
         CatalystNote(label="Updated", value=f"{_checked(fetched_at)}; prices from this run."),
     ]
@@ -888,10 +1077,11 @@ def _earnings_catalyst(
         status_text=GRADE_TEXT[grade],
         detail=detail + ".",
         headline=f"{len(led)} of {total}",
-        headline_note=f"earnings ahead of price, year to {ql}"
+        headline_note="earnings ahead of price, each company's latest filing"
         + (f" ({len(unknown)} not comparable)" if unknown else ""),
         bars=bars,
-        bars_note="Implied change in trailing P/E. Left of zero: earnings grew faster than the price.",
+        bars_note="Implied change in trailing P/E over each company's latest reported year. Left of zero: "
+        "earnings grew faster than the price.",
         observation=observation,
         interpretation=interpretation,
         confirmation=confirmation,
@@ -900,73 +1090,102 @@ def _earnings_catalyst(
     )
 
 
-def _software_catalyst(
-    r: Readings, q: pd.Period | None, members: dict[str, pd.Series], fetched_at: str | None, t: CycleThresholds = CYCLE
-) -> Catalyst:
+def software_latest(
+    members: dict[str, pd.Series],
+    tickers: list[str],
+    facts: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    """Each software company through its own latest filing: trailing-year revenue growth, the change
+    in that growth vs its own prior quarter, and the change a quarter before that."""
+    rows: list[dict[str, Any]] = []
+    facts = facts or {}
+    for ticker in tickers:
+        row: dict[str, Any] = {"ticker": ticker, "quarter": None, "growth": None, "growth_prev": None}
+        row.update(change=None, change_prev=None, fiscal_end=None, filed=None, form=None, asof=None, reason=None)
+        rows.append(row)
+        series = members.get(ticker)
+        g = company_growth(series) if series is not None and not series.empty else pd.Series(dtype=float)
+        if g.empty:
+            row["reason"] = "no revenue filings read"
+            continue
+        q = max(g.index)
+        now = _val(g, q)
+        prev = None if (q - 1) not in g.index else _val(g, q - 1)
+        prev2 = None if (q - 2) not in g.index else _val(g, q - 2)
+        end = _fiscal_end(series, q) if series is not None else None
+        filed = _first_filed(facts.get(ticker), end)
+        row.update(
+            quarter=qlabel(q),
+            growth=round(now, 4),
+            growth_prev=None if prev is None else round(prev, 4),
+            change=None if prev is None else round(now - prev, 4),
+            change_prev=None if prev is None or prev2 is None else round(prev - prev2, 4),
+            fiscal_end=None if end is None else str(end.date()),
+            asof=_asof(filed, end),
+        )
+        if filed is not None:
+            row["filed"], row["form"] = filed
+        if row["change_prev"] is None:
+            row["reason"] = "not enough quarters to measure acceleration"
+    return rows
+
+
+def _median(values: list[float]) -> float:
+    return float(pd.Series(values, dtype=float).median())
+
+
+def _software_catalyst(rows: list[dict[str, Any]], fetched_at: str | None, t: CycleThresholds = CYCLE) -> Catalyst:
     label = "Software revenue accelerating"
-    s = None if q is None else r.at(r.software, q)
-    a = None if q is None else r.at(r.software_accel, q)
-    if q is None or s is None or a is None:
+    complete = [r for r in rows if r["change_prev"] is not None]
+    if not rows or len(complete) < len(rows):
+        missing = "; ".join(f"{r['ticker']}: {r['reason']}" for r in rows if r["change_prev"] is None)
         return Catalyst(
             key="software",
             label=label,
             status="unknown",
             detail="Not enough software filings yet.",
-            observation="Not enough software filings yet.",
+            observation="Not enough software filings yet." + (f" {missing}." if missing else ""),
+            rows=rows,
         )
-    ap = r.at(r.software_accel, q - 1)
-    up, n = r.software_breadth.get(q, (0, 0))
-    monet = next(c for c in phase_checks(r, q, t) if c.phase_id == 3)
-    # Two different numbers, which disagreed on the first live reads: the median company's
-    # growth RATE (15.2% -> 14.2% -> 13.6%) fell while the median CHANGE in each company's
-    # growth was positive (+0.64, +0.36), because one large slowdown (Intuit) crossed the
-    # middle. "Starting" needs both to point up; otherwise the read is mixed and says why.
-    s_prev = r.at(r.software, q - 1)
-    level = None if s_prev is None else s - s_prev
-    if monet.met is True:
+    # Medians over each company's own latest quarter. Two different numbers, which disagreed on the
+    # first live reads: the median company's growth RATE (15.2% -> 14.2% -> 13.6%) fell while the
+    # median CHANGE in each company's growth was positive (+0.64, +0.36), because one large slowdown
+    # (Intuit) crossed the middle. "Starting" needs both to point up; otherwise the read is mixed.
+    s = _median([r["growth"] for r in rows])
+    s_prev = _median([r["growth_prev"] for r in rows])
+    a = _median([r["change"] for r in rows])
+    ap = _median([r["change_prev"] for r in rows])
+    up, n = sum(1 for r in rows if r["change"] > 0), len(rows)
+    level = s - s_prev
+    met_growth = s >= t.monetization_software_growth
+    met_accel = a > 0 and ap > 0 and a + ap >= t.monetization_accel_points
+    met_broad = up * 2 >= n
+    if met_growth and met_accel and met_broad:
         status, verdict = "yes", "Yes: two quarters running, material and broad"
-    elif a > 0 and (level is None or level >= 0):
+    elif a > 0 and level >= 0:
         status, verdict = "starting", "Starting: the typical company is accelerating, not yet decisively"
     elif a > 0:
         status, verdict = "mixed", "Mixed: most companies are edging up, but the group's median growth rate fell"
     else:
         status, verdict = "not yet", "Not yet: the typical company is slowing"
-    was = "" if s_prev is None else f" (was {_pct(s_prev, 1)})"
-    ql = qlabel(q)
+    quarters = _by_quarter(rows)
 
-    rows: list[dict[str, Any]] = []
-    bars = []
-    for ticker, series in members.items():
-        g = company_growth(series)
-        now = None if q not in g.index else _val(g, q)
-        prev = None if (q - 1) not in g.index else _val(g, q - 1)
-        change = None if now is None or prev is None else now - prev
-        end = _fiscal_end(series, q)
-        rows.append(
-            {
-                "ticker": ticker,
-                "growth": None if now is None else round(now, 4),
-                "growth_prev": None if prev is None else round(prev, 4),
-                "change": None if change is None else round(change, 4),
-                "fiscal_end": None if end is None else str(end.date()),
-            }
+    bars = [
+        CatalystBar(
+            label=r["ticker"],
+            value=r["change"],
+            text=f"{r['change']:+.{2 if abs(r['change']) < 0.1 else 1}f} pts",
+            tone="up" if r["change"] > 0 else "down",
+            tag="Accelerating" if r["change"] > 0 else "Slowing",
+            sub=f"growth {r['growth']:.1f}% (was {r['growth_prev']:.1f}%)",
+            asof=r["asof"],
         )
-        bars.append(
-            CatalystBar(
-                label=ticker,
-                value=change,
-                text="n/a" if change is None else f"{change:+.{2 if abs(change) < 0.1 else 1}f} pts",
-                tone="unknown" if change is None else ("up" if change > 0 else "down"),
-                tag=None if change is None else ("Accelerating" if change > 0 else "Slowing"),
-                sub=None if now is None else f"growth {now:.1f}%" + ("" if prev is None else f" (was {prev:.1f}%)"),
-            )
-        )
-
+        for r in rows
+    ]
     observation = (
-        f"Group: the median company's revenue growth is {_pct(s, 1)}{was}"
-        + ("" if level is None else f", {level:+.1f} pts")
-        + f". Companies: the typical company's own growth changed {_pts(ap)} then {_pts(a)}, and {up} of {n} "
-        f"are accelerating ({ql})."
+        f"Group: the median company's revenue growth is {_pct(s, 1)} (was {_pct(s_prev, 1)}, {level:+.1f} pts). "
+        f"Companies: the typical company's own growth changed {_pts(ap)} then {_pts(a)}, and {up} of {n} are "
+        f"accelerating. Each company through its latest filing ({quarters})."
     )
     interpretation = {
         "yes": "Acceleration is broad and has lasted two quarters: AI spending is showing up as software revenue.",
@@ -978,31 +1197,46 @@ def _software_catalyst(
         "not yet": "The typical company is slowing: no sign yet of AI spending turning into software revenue.",
     }[status]
 
-    def mark(met: bool | None) -> str:
-        return "met" if met is True else ("not met" if met is False else "unknown")
+    def mark(met: bool) -> str:
+        return "met" if met else "not met"
 
-    conds = monet.conditions
     confirmation = (
-        f"Monetization needs all three: median growth ≥ {t.monetization_software_growth:.0f}% (now {_pct(s, 1)}, "
-        f"{mark(conds[0].met)}); the typical company's growth up in each of the last two quarters, totalling ≥ "
-        f"{t.monetization_accel_points:.1f} pt (now {_signed(ap)} then {_signed(a)}, total {_signed(_sum(a, ap))}, "
-        f"{mark(conds[1].met)}); "
-        f"at least half accelerating (now {up} of {n}, {mark(conds[2].met)})."
+        f"All three: median growth ≥ {t.monetization_software_growth:.0f}% (now {_pct(s, 1)}, {mark(met_growth)}); "
+        f"the typical company's growth up in each of its last two quarters, totalling ≥ "
+        f"{t.monetization_accel_points:.1f} pt (now {_signed(ap)} then {_signed(a)}, total {_signed(a + ap)}, "
+        f"{mark(met_accel)}); at least half accelerating (now {up} of {n}, {mark(met_broad)})."
     )
     if status in ("starting", "mixed"):
         confirmation += " For this card to read better than mixed, the group's median growth rate must not fall."
-    ends = " · ".join(f"{x['ticker']} {_day(x['fiscal_end'])}" for x in rows if x["fiscal_end"]) or "n/a"
+    confirmation += " Each company's row updates when it files its next 10-Q or 10-K."
+    filings = (
+        " · ".join(
+            f"{r['ticker']} fiscal quarter ended {_day(r['fiscal_end'])}"
+            + (f", {r['form']} filed {_day(r['filed'])}" if r.get("filed") else "")
+            for r in rows
+            if r["fiscal_end"]
+        )
+        or "n/a"
+    )
     methodology = [
         CatalystNote(
             label="Measured",
-            value=f"Revenue, trailing 12 months vs a year earlier, by calendar quarter, to {ql}. Group = the median "
-            "company, not summed dollars. Acceleration = a company's growth minus its own growth a quarter earlier.",
+            value="Revenue, trailing 12 months vs a year earlier, each company through its own latest filing "
+            f"({quarters}). Group = the median company, not summed dollars. Acceleration = a company's growth "
+            "minus its own growth a quarter earlier.",
         ),
-        CatalystNote(label="Latest fiscal quarter", value=ends),
+        CatalystNote(label="Latest filings", value=filings),
         CatalystNote(
             label="Source",
             value="Each company's own 10-Q/10-K revenue at SEC EDGAR (XBRL). Oracle counts as a capex spender, "
             "not software.",
+        ),
+        CatalystNote(
+            label="Limits",
+            value="The as-of date is the 10-Q/10-K filing, which can trail the earnings call by days to a few "
+            "weeks. Companies can sit on different quarters. The phase checklist (Monetization) uses the same "
+            "thresholds but waits for every company to report the same quarter, so the two can differ "
+            "for a few weeks each season.",
         ),
         CatalystNote(label="Updated", value=_checked(fetched_at) + "."),
     ]
@@ -1010,12 +1244,13 @@ def _software_catalyst(
         key="software",
         label=label,
         status=status,
-        detail=f"{verdict}. Median growth rate {_pct(s, 1)}{was}; the typical company's own growth "
-        f"changed {_pts(ap)} then {_pts(a)}; {up} of {n} companies accelerating ({ql}).",
+        detail=f"{verdict}. Median growth rate {_pct(s, 1)} (was {_pct(s_prev, 1)}); the typical company's own "
+        f"growth changed {_pts(ap)} then {_pts(a)}; {up} of {n} companies accelerating ({quarters}).",
         headline=_pct(s, 1),
-        headline_note=f"median company's revenue growth, trailing year to {ql}{was} · {up} of {n} accelerating",
+        headline_note=f"median company's revenue growth, each company's latest filing (was {_pct(s_prev, 1)}) · "
+        f"{up} of {n} accelerating",
         bars=bars,
-        bars_note="Each company's own change in growth vs the prior quarter. The headline is the group.",
+        bars_note="Each company's own change in growth vs its prior quarter. The headline is the group.",
         observation=observation,
         interpretation=interpretation,
         confirmation=confirmation,
@@ -1170,24 +1405,19 @@ def _rates_catalyst(effr_minus_bill: float | None, effr_minus_2y: float | None, 
 
 
 def catalysts(
-    r: Readings,
-    q: pd.Period | None,
     evp: list[dict[str, Any]],
+    software: list[dict[str, Any]],
     effr_minus_bill: float | None,
     effr_minus_2y: float | None = None,
     *,
-    software: dict[str, pd.Series] | None = None,
     rates: RateInputs | None = None,
     fetched_at: str | None = None,
 ) -> list[Catalyst]:
     return [
-        _software_catalyst(r, q, software or {}, fetched_at),
-        _earnings_catalyst(evp, q, fetched_at),
+        _software_catalyst(software, fetched_at),
+        _earnings_catalyst(evp, fetched_at),
         _rates_catalyst(effr_minus_bill, effr_minus_2y, rates),
     ]
-
-
-# --- Assembling the cycle ---------------------------------------------------------------------------
 
 
 def build_cycle(
@@ -1196,6 +1426,7 @@ def build_cycle(
     effr_minus_bill: float | None,
     effr_minus_2y: float | None = None,
     rates: RateInputs | None = None,
+    price_checks: dict[str, pd.Series] | None = None,
 ) -> Cycle:
     companies = (cache or {}).get("companies") or {}
     filings: list[CompanyFiling] = []
@@ -1275,8 +1506,20 @@ def build_cycle(
             if row["phase_id"] != phase_id:
                 break
             since, run = row["quarter"], run + 1
+
+    # The catalysts read each company through its own latest filing (no waiting for the group):
+    # each row is internally consistent and dated. Only the phase needs a common quarter.
+    def raw(ticker: str, metric: str) -> list[dict[str, Any]]:
+        slot = (companies.get(ticker) or {}).get(metric) or {}
+        return list(slot.get("facts") or [])
+
     chip_tickers = [t for t, _, _ in CYCLE_COMPANIES["chips"]]
-    evp = earnings_vs_price(eps, prices, latest, chip_tickers) if latest is not None else []
+    chip_facts = {t: {m: raw(t, m) for m in ("eps", *EPS_CHECK_METRICS)} for t in chip_tickers}
+    evp = earnings_vs_price(eps, prices, None, chip_tickers, price_checks=price_checks, facts=chip_facts)
+    soft_tickers = [t for t, _, _ in CYCLE_COMPANIES["software"]]
+    soft_rows = software_latest(
+        groups["software"], soft_tickers, {t: raw(t, CYCLE_GROUP_METRIC["software"]) for t in soft_tickers}
+    )
 
     def single(group: str, members: dict[str, pd.Series]) -> pd.Series:
         return single_quarter_growth(members, CYCLE_GROUP_HOW[group])
@@ -1379,12 +1622,10 @@ def build_cycle(
         metrics=metrics,
         history=history,
         catalysts=catalysts(
-            r,
-            latest,
             evp,
+            soft_rows,
             effr_minus_bill,
             effr_minus_2y,
-            software=groups["software"] if complete["software"] else {},
             rates=rates,
             fetched_at=(cache or {}).get("fetched_at"),
         ),

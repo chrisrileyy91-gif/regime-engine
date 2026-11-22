@@ -23,8 +23,8 @@ records a day later.
 | EFFR | NY Fed (checked against its own target range) | — | — |
 | SOXX, IGV | Alpaca consolidated tape (SIP) | Yahoo ±0.3% | — |
 | KOSPI, Samsung | EODHD end-of-day (2–3h after close) → KRX Open API (next day) | Yahoo ±0.1% | — |
-| Company filings | SEC EDGAR XBRL companyconcept (each company's own 10-Q/10-K) | — | entity-name check per CIK |
-| Chip stock prices | Alpaca SIP quarter-end closes (earnings-vs-price catalyst only) | — | — |
+| Company filings | SEC EDGAR XBRL companyconcept (each company's own 10-Q/10-K) | chips: diluted EPS × diluted shares = net income in the same filing, ±2% or cent rounding (failure withholds) | entity-name check per CIK |
+| Chip stock prices | Alpaca SIP quarter-end closes (earnings-vs-valuation card only) | Yahoo same-date close ±0.3% (disagreement withholds the company) | — |
 | Official, not cross-checked | Cboe TNX/TYX daily high and TYX close; Treasury 2Y, 6M, 1Y; Alpaca SIP RSP, USO (oil), UUP (dollar), HYG (credit), CRWV/ORCL/NBIS (debt-funded AI names, own request) | — | — |
 | Headlines | Benzinga via Alpaca news API (same keys), labelled by Claude from the list only | cited ids must exist | — |
 
@@ -150,9 +150,18 @@ software group it alone faked an acceleration on the first real read.
   Confirmation required, written from the numbers every run (never stored prose), plus
   `methodology` notes and `rows` (the numbers behind every bar, so the page reconciles). The page
   shows name, status, headline number and bars; the layers and methodology sit under "See details".
-  - Software revenue accelerating: unchanged rule ("starting" needs the median growth RATE not
-    falling as well as a positive median CHANGE; when they disagree it reads "mixed"). Bars are each
-    company's own change in growth; the headline is the group (median company).
+  The cards read **each company through its own latest filing** (Nov 22, 2026: "a quarter only once
+  every company reports" left them a quarter stale for weeks). Every row says which filing it is
+  ("As of 11/19/2026 earnings (10-Q, quarter ended 10/26/2026)": the first 10-Q/10-K that reported
+  that quarter). That date is the filing, which can trail the earnings call by days to a few weeks
+  (MU's FY2026 10-K: call late Sep, filed Oct 9); press releases aren't machine-readable. The phase
+  checklist still waits for a common quarter because it sums dollars across companies; the software
+  card can therefore read "Yes" before the Monetization checklist does (the fixture does: ADBE is
+  already on Q3).
+  - Software revenue accelerating: same thresholds as Monetization, on medians of each company's own
+    latest quarter ("starting" needs the median growth RATE not falling as well as a positive median
+    CHANGE; when they disagree it reads "mixed"). Bars are each company's own change in growth; the
+    headline is the group (median company).
   - Semiconductor earnings vs. valuation (key `earnings`): TTM diluted GAAP EPS vs the last close
     on or before each calendar quarter end (within 7 days), year to the latest quarter. Implied
     multiple change = (1 + price growth) / (1 + EPS growth) − 1 (a proxy for the trailing P/E change).
@@ -162,6 +171,10 @@ software group it alone faked an acceleration on the first real read.
     end, fiscal quarters not a year apart) stays in the group as unknown; the grade is "unknown"
     when it would change depending on how that company went (Kleene). EPS turning negative counts
     against (no multiple). EPS up 3x or more is flagged "low base" (MU, Q2 2026: x7.9).
+    Checks per company: each close vs Yahoo's same-date close (±0.3%; conflict withholds, no copy =
+    "not cross-checked"); each EPS fact in the two trailing years vs EPS × diluted weighted shares =
+    net income in the same filing (`NetIncomeLoss`, `WeightedAverageNumberOfDilutedSharesOutstanding`;
+    failure withholds, missing facts = "not reconcilable"). The "Checks" note lists both per company.
   - Monetary easing expectations (key `cuts`): status rule unchanged (Treasury 2Y vs EFFR, ±0.25;
     the 3M bill is the fallback). Beside it: the Treasury path 3M/6M/1Y/2Y minus EFFR, and the 2Y gap
     20 Treasury days earlier. Market pricing is kept apart from policy (an FOMC cut = EFFR falling).

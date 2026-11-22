@@ -305,7 +305,12 @@ CYCLE_TAGS: dict[str, tuple[str, ...]] = {
     "ocf": ("NetCashProvidedByUsedInOperatingActivities",),
     "revenue": ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"),
     "eps": ("EarningsPerShareDiluted",),
+    # Read only to check each EPS figure against its own filing (EPS x diluted shares ~ net income).
+    "net_income": ("NetIncomeLoss",),
+    "diluted_shares": ("WeightedAverageNumberOfDilutedSharesOutstanding",),
 }
+CYCLE_UNITS = {"eps": "USD/shares", "diluted_shares": "shares"}  # every other metric is in USD
+EPS_CHECK_METRICS = ("net_income", "diluted_shares")
 CYCLE_GROUP_METRIC = {"hyperscalers": "capex", "chips": "revenue", "software": "revenue"}
 # Capex and chip revenue are dollar aggregates (sum). Software is the median company, so one
 # fast grower can't stand in for the industry; breadth (how many are accelerating) is shown too.
@@ -323,6 +328,9 @@ CHIPS_EX = ("MU",)
 # Chip stock prices for "earnings vs price": quarter-end closes from the Alpaca SIP feed, fetched
 # with SOXX/IGV. Not cross-checked (a quarterly comparison, never part of the daily call).
 CYCLE_PRICE_TICKERS = tuple(t for t, _, _ in CYCLE_COMPANIES["chips"])
+# Yahoo copies of the chip stocks: the confirming check on those quarter-end closes (since Nov 2026;
+# a disagreement withholds the company's row). Not call inputs.
+CHIP_PRICE_CHECK_SYMBOLS: dict[str, str] = {f"{t.lower()}@yahoo": t for t in CYCLE_PRICE_TICKERS}
 # The broad market, for the tally. Equal-weight (RSP), not SPY: chips are a large slice of the
 # cap-weighted index, so a semis rout drags SPY by itself (Oct 14: SOXX -4.5%, SPY -1.1%; Sep 14:
 # SPY -0.5% while RSP +0.1%). Alpaca SIP, fetched with SOXX, not cross-checked (classification only).
@@ -379,6 +387,11 @@ class ValuationThresholds:
     confirming_grade: str = "confirming"  # the grade the "confirmation required" line asks for
     # Quarter-end closes must fall this close to the calendar quarter end, or the price is missing.
     price_date_tolerance_days: int = 7
+    price_check_pct: float = 0.3  # Alpaca vs Yahoo on the same date; beyond this the close is withheld
+    # EPS x diluted shares vs net income in the same filing: within this share of net income, or
+    # rounding to the cent on the share count (small quarters), whichever is larger.
+    eps_check_pct: float = 2.0
+    eps_check_cents: float = 0.006
     # The two fiscal quarters compared must end a year apart (52/53-week years drift a week).
     fiscal_year_tolerance_days: int = 21
 

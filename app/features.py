@@ -52,6 +52,9 @@ class MarketFeatures:
     funding_basket_20d_pct: float | None = None  # the names' average, compounded over the same sessions
     funding_soxx_20d_pct: float | None = None
     effr_minus_2y_pct: float | None = None
+    effr_minus_2y_prev_pct: float | None = None  # the same gap THRESHOLDS.cuts_change_sessions Treasury days earlier
+    y6m_pct: float | None = None  # Treasury par 6M and 1Y: the path between the 3M bill and the 2Y
+    y1_pct: float | None = None
     bill_3m_pct: float | None = None
     effr_pct: float | None = None
     effr_minus_3m_pct: float | None = None
@@ -152,4 +155,27 @@ def build_features(
         f.y2_pct = last_valid(y2)
     if f.y2_pct is not None and f.effr_pct is not None:
         f.effr_minus_2y_pct = f.effr_pct - f.y2_pct
+    for name, attr in (("y6m", "y6m_pct"), ("y1", "y1_pct")):
+        series = extras.get(name)
+        if series is not None and not series.dropna().empty:
+            f.dates[name] = str(series.dropna().index[-1].date())
+            setattr(f, attr, last_valid(series))
+    if y2 is not None and effr is not None:
+        prev = gap_sessions_ago(effr, y2, t.cuts_change_sessions)
+        if prev is not None:
+            f.dates["y2_prev"], f.effr_minus_2y_prev_pct = prev
     return f
+
+
+def gap_sessions_ago(effr: pd.Series, y2: pd.Series, sessions: int) -> tuple[str, float] | None:
+    """EFFR minus the 2Y `sessions` Treasury days before the newest 2Y, with EFFR as of that day
+    (EFFR changes only at FOMC decisions, so the last fixing on or before the date stands)."""
+    two = y2.dropna()
+    rate = effr.dropna()
+    if len(two) <= sessions or rate.empty:
+        return None
+    day = two.index[-1 - sessions]
+    known = rate[rate.index <= day]
+    if known.empty:
+        return None
+    return str(pd.Timestamp(day).date()), float(known.iloc[-1]) - float(two.iloc[-1 - sessions])

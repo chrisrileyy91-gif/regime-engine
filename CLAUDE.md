@@ -175,6 +175,10 @@ software group it alone faked an acceleration on the first real read.
     "not cross-checked"); each EPS fact in the two trailing years vs EPS × diluted weighted shares =
     net income in the same filing (`NetIncomeLoss`, `WeightedAverageNumberOfDilutedSharesOutstanding`;
     failure withholds, missing facts = "not reconcilable"). The "Checks" note lists both per company.
+    Net income falls back through `ProfitLoss` and the NetIncomeLossAvailableToCommonStockholders
+    tags (Broadcom dropped `NetIncomeLoss` after fiscal 2024, so only 1 of its periods was checked).
+    Each cached series records the tag list it was read with (`tried`); a changed list refetches at
+    once instead of waiting out the 20 hours.
   - Monetary easing expectations (key `cuts`): status rule unchanged (Treasury 2Y vs EFFR, ±0.25;
     the 3M bill is the fallback). Beside it: the Treasury path 3M/6M/1Y/2Y minus EFFR, and the 2Y gap
     20 Treasury days earlier. Market pricing is kept apart from policy (an FOMC cut = EFFR falling).

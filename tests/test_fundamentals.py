@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 import respx
 
-from app.config import CYCLE_COMPANIES, EPS_CHECK_METRICS, SEC_CONCEPT_URL
+from app.config import CYCLE_COMPANIES, CYCLE_TAGS, EPS_CHECK_METRICS, SEC_CONCEPT_URL
 from app.fundamentals import (
     build_cycle,
     by_calendar_quarter,
@@ -280,6 +280,45 @@ async def test_fetch_prefers_the_longer_history_on_a_tie() -> None:
     async with httpx.AsyncClient() as client:
         await fetch_filings(client, cache, datetime(2026, 10, 15, tzinfo=timezone.utc))
     assert cache["companies"]["INTU"]["revenue"]["tag"] == "RevenueFromContractWithCustomerExcludingAssessedTax"
+
+
+@respx.mock
+async def test_net_income_falls_back_to_a_newer_tag() -> None:
+    """Broadcom's NetIncomeLoss stops at fiscal 2024; a fallback tag with newer periods wins."""
+    old = _concept("BROADCOM INC.", end="2024-11-03")
+    new = _concept("BROADCOM INC.")
+    base = "https://data.sec.gov/api/xbrl/companyconcept/CIK0001730168/us-gaap/"
+    respx.get(base + "NetIncomeLoss.json").mock(return_value=httpx.Response(200, json=old))
+    respx.get(base + "ProfitLoss.json").mock(return_value=httpx.Response(200, json=new))
+    respx.get(url__startswith=base + "NetIncomeLossAvailable").mock(return_value=httpx.Response(404))
+    for cik, name in {cik: name for g in CYCLE_COMPANIES.values() for _, cik, name in g}.items():
+        respx.get(url__startswith=f"https://data.sec.gov/api/xbrl/companyconcept/CIK{cik}/").mock(
+            return_value=httpx.Response(200, json=_concept(name))
+        )
+    cache: dict = {}
+    async with httpx.AsyncClient() as client:
+        await fetch_filings(client, cache, datetime(2026, 10, 15, tzinfo=timezone.utc))
+    slot = cache["companies"]["AVGO"]["net_income"]
+    assert slot["tag"] == "ProfitLoss" and slot["tried"] == list(CYCLE_TAGS["net_income"])
+
+
+@respx.mock
+async def test_a_series_read_with_an_older_tag_list_refetches_at_once() -> None:
+    names = {cik: name for group in CYCLE_COMPANIES.values() for _, cik, name in group}
+    for cik, name in names.items():
+        respx.get(url__startswith=SEC_CONCEPT_URL.split("CIK")[0] + f"CIK{cik}/").mock(
+            return_value=httpx.Response(200, json=_concept(name))
+        )
+    cache = sec_cache(fetched_at="2026-10-15T00:00:00+00:00")
+    for ticker, _, _ in CYCLE_COMPANIES["hyperscalers"]:
+        cache["companies"][ticker]["ocf"] = {"error": "none yet"}
+    for ticker, _, _ in CYCLE_COMPANIES["chips"]:
+        for metric in EPS_CHECK_METRICS:
+            cache["companies"][ticker][metric] = {"error": "none yet"}
+    cache["companies"]["AVGO"]["eps"]["tried"] = ["EarningsPerShareDiluted", "SomethingOld"]
+    async with httpx.AsyncClient() as client:
+        await fetch_filings(client, cache, datetime(2026, 10, 15, 10, tzinfo=timezone.utc))
+    assert cache["companies"]["AVGO"]["eps"]["tried"] == list(CYCLE_TAGS["eps"])
 
 
 @respx.mock

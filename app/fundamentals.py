@@ -129,7 +129,21 @@ async def _fetch_series(
         latest = max(str(f["end"]) for f in facts)
         if best is None or (latest, len(facts)) > (best["latest"], len(best["facts"])):
             best = {"tag": tag, "facts": facts, "latest": latest, "entity": entity}
-    return best or {"error": f"no {metric} facts under {', '.join(CYCLE_TAGS[metric])}"}
+    tried = list(CYCLE_TAGS[metric])
+    if best is None:
+        return {"error": f"no {metric} facts under {', '.join(tried)}", "tried": tried}
+    return {**best, "tried": tried}
+
+
+def _current(have: dict[str, Any], ticker: str, metric: str) -> bool:
+    """A cached series counts only if it was read with today's tag list: adding a fallback tag
+    (Broadcom's net income, Nov 2026) must not wait out the 20-hour refresh."""
+    slot = (have.get(ticker) or {}).get(metric)
+    if not isinstance(slot, dict):
+        return False
+    if "facts" not in slot:
+        return True  # an error is retried on the normal schedule
+    return list(slot.get("tried") or []) == list(CYCLE_TAGS[metric])
 
 
 async def fetch_filings(client: httpx.AsyncClient | None, cache: SecCache, now: datetime | None = None) -> list[str]:
@@ -137,7 +151,7 @@ async def fetch_filings(client: httpx.AsyncClient | None, cache: SecCache, now: 
     now = now or datetime.now(timezone.utc)
     fetched = cache.get("fetched_at")
     have = cache.get("companies") or {}
-    complete = all(metric in (have.get(ticker) or {}) for _, ticker, _, metric in _needed())
+    complete = all(_current(have, ticker, metric) for _, ticker, _, metric in _needed())
     if complete and fetched and now - datetime.fromisoformat(fetched) < timedelta(hours=SEC_REFRESH_HOURS):
         return []  # a cache written before a series was added refetches at once
     headers = {"User-Agent": os.environ.get("SEC_USER_AGENT") or SEC_DEFAULT_USER_AGENT}

@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.config import CYCLE_TAGS
+
 FIXTURE = Path(__file__).parent / "fixtures" / "sec_filings.txt"
 
 
@@ -23,5 +25,6 @@ def sec_cache(fetched_at: str = "2026-10-14T10:00:00+00:00") -> dict[str, Any]:
         for row in rows.split(";"):
             start, end, val = row.split(",")
             facts.append({"start": _date(start), "end": _date(end), "val": float(val), "form": "10-Q", "filed": ""})
-        companies.setdefault(ticker, {})[metric] = {"tag": tag, "facts": facts, "latest": facts[-1]["end"]}
+        slot = {"tag": tag, "facts": facts, "latest": facts[-1]["end"], "tried": list(CYCLE_TAGS[metric])}
+        companies.setdefault(ticker, {})[metric] = slot
     return {"fetched_at": fetched_at, "companies": companies}

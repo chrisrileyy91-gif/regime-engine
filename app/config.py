@@ -306,7 +306,14 @@ CYCLE_TAGS: dict[str, tuple[str, ...]] = {
     "revenue": ("Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"),
     "eps": ("EarningsPerShareDiluted",),
     # Read only to check each EPS figure against its own filing (EPS x diluted shares ~ net income).
-    "net_income": ("NetIncomeLoss",),
+    # Broadcom stopped tagging NetIncomeLoss after fiscal 2024 (Nov 2026: 1 of 12 periods checked);
+    # the newest of these wins, as for every metric. A slot fetched with a different list refetches.
+    "net_income": (
+        "NetIncomeLoss",
+        "ProfitLoss",
+        "NetIncomeLossAvailableToCommonStockholdersDiluted",
+        "NetIncomeLossAvailableToCommonStockholdersBasic",
+    ),
     "diluted_shares": ("WeightedAverageNumberOfDilutedSharesOutstanding",),
 }
 CYCLE_UNITS = {"eps": "USD/shares", "diluted_shares": "shares"}  # every other metric is in USD

@@ -112,7 +112,13 @@ cached; quarters; phases; catalysts) → `service.py` (payload) → `snapshot.py
   `EODHD_API_KEY`, `KRX_API_KEY`. Never put a personal email in the repo (it is public). EODHD takes its key in the URL, so every error string passes through
   `data.redact()` before it can be published. Never bypass it.
 - Pheme alerts when data quality is DEGRADED/STALE or no read was produced. Silent when clean.
-- The page detects a missed scheduled run by itself (schedule mirrored in `web/index.html`).
+- The clock skips NYSE full-day closures (its `market_calendar.py`). `app/market_calendar.py` is a
+  copy (tests pin 2026–2028 to the clock's output); an unscheduled closure goes in both files'
+  `EXTRA_CLOSED` the same day. `app/schedule.py` writes `schedule` into regime.json at publish time
+  (counted from now, not as_of): the next 10 runs, the grace, and the holidays in range. The page
+  only compares that list with the phone's clock: a run past its grace with no newer read shows
+  "didn't publish"; a holiday shows "market closed today". Until Nov 26, 2026 the page kept its own
+  weekday-only copy of the schedule and called Thanksgiving's skipped 06:00 run a failure.
 
 ## Hard rules
 - Python 3.10+, full type hints, `mypy --strict` clean, `ruff` clean.

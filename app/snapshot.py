@@ -24,6 +24,7 @@ from app.data import FetchResult, KrxCache, fetch_all, redact
 from app.fundamentals import SecCache, fetch_filings
 from app.models import DataQuality, QualityIssue, RegimeStatus
 from app.news import NewsCache, update_news
+from app.schedule import build_schedule
 from app.service import build_status
 from app.verify import verify_all
 
@@ -224,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         status = resolve_status(results, error, args.state, fills, sec_cache, news_cache)
         if status.data_quality is not None:
             status.data_quality.issues += [QualityIssue(severity="info", message=n) for n in news_notes]
+    # Counted from now, not from as_of: a stale fallback republishes an old read.
+    status.schedule = build_schedule()
     history = write_outputs(status, args.state, args.site)
 
     quality = status.data_quality

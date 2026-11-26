@@ -206,11 +206,17 @@ SANITY_BOUNDS: dict[str, tuple[float, float]] = {
     "samsung": (100.0, 10000000.0),
 }
 
-# --- Publishing schedule (New York time, weekdays). Mirrors meridian-clock. ---------
+# --- Publishing schedule (New York time). Mirrors meridian-clock's schedule.json. ---------
+# The clock dispatches on weekdays except NYSE full-day closures (app/market_calendar.py, a copy of
+# the clock's). app/schedule.py turns this into the run list in regime.json; the page reads that.
 # 16:40, not 16:25: Cboe's quote feed is 15 minutes delayed and VIX settles at 16:15, so the settle
 # isn't visible before ~16:30. All 19 close runs from Oct 14 to Nov 10, 2026 carried the prior VIX.
 SCHEDULE_NY = ("06:00", "16:40")
+SCHEDULE_TZ = "America/New_York"
+# The page says a run "didn't publish" once it is this late (5-minute clock tick + ~15-minute job +
+# a queued runner).
 MISSED_RUN_GRACE_MINUTES = 60
+SCHEDULE_RUNS_AHEAD = 10  # runs listed in regime.json: five trading days at two a day
 
 # --- Claude web search: last-resort gap filler ------------------------------------------
 # Runs only when an input's record is missing, unconfirmed or a session behind AND Yahoo has

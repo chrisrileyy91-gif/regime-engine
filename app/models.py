@@ -253,6 +253,20 @@ class Today(BaseModel):
     overnight: list[OvernightItem] = []
 
 
+class ClosedDay(BaseModel):
+    date: str  # YYYY-MM-DD, New York
+    name: str  # e.g. "Thanksgiving"
+
+
+class PublishSchedule(BaseModel):
+    """When the next reads are due (app/schedule.py). The page compares these with its own clock."""
+
+    published_at: str  # when this file was written (UTC); a stale fallback keeps an older as_of
+    next_runs: list[str] = []  # scheduled run times after published_at, New York ISO, oldest first
+    grace_minutes: int = 60  # a run this late counts as missed
+    closed: list[ClosedDay] = []  # NYSE full-day closures (weekdays) from today through the last run
+
+
 class RegimeStatus(BaseModel):
     # Fields kept from the original spec's payload (dashboard-compatible), with new meanings:
     phase: str  # the CYCLE phase from company filings (quarterly), e.g. "Buildout"
@@ -278,3 +292,4 @@ class RegimeStatus(BaseModel):
     inputs: dict[str, object] = {}
     sources: list[SourceStatus] = []
     notes: list[str] = []
+    schedule: PublishSchedule | None = None  # next scheduled runs, holidays skipped

@@ -433,8 +433,6 @@
   const NEWS = { company: "Company news", ai_demand: "AI-demand worries", policy: "Policy", analyst: "Analyst calls", macro_data: "Economic data", fed: "The Fed", geopolitics: "Geopolitics/oil", none_clear: "Nothing clear", unlabelled: "Not read yet" };
   const TAG = { rates: "yields jumped", oil: "oil", dollar: "dollar", fear: "VIX", market: "broad market", credit: "credit (high-yield bonds)", rotation: "rotation", chips: "chips alone", unknown: "unknown" };
   const CAT_TEXT = { yes: "Yes", starting: "Starting", mixed: "Mixed", "not yet": "Not yet", unknown: "Unknown", strong: "Strong", confirming: "Confirming", weak: "Weak" };
-  const SCHEDULE_NY = ["06:00", "16:40"];  // mirrors meridian-clock schedule.json
-  const GRACE_MINUTES = 60;
   const STATUS_TEXT = { VERIFIED: "Verified", OFFICIAL: "Official", FILLED: "Filled", CONFLICT: "Withheld", UNCONFIRMED: "Withheld", MISSING: "Unavailable" };
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -493,40 +491,44 @@
     }).formatToParts(date).map((p) => [p.type, p.value]));
     return { ymd: `${parts.year}-${parts.month}-${parts.day}`, minutes: Number(parts.hour) * 60 + Number(parts.minute), weekday: parts.weekday };
   }
-  const slotMinutes = () => SCHEDULE_NY.map((t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3)));
   const clock = (m) => `${Math.floor(m / 60) % 12 || 12}:${String(m % 60).padStart(2, "0")} ${m < 720 ? "AM" : "PM"}`;
+  const DAY_MS = 86400000;
 
-  // The most recent scheduled run that should have published by now (weekdays, NY time).
-  function lastExpectedRun(now) {
-    for (let back = 0; back < 7; back++) {
-      const p = nyParts(new Date(now.getTime() - back * 86400000));
-      if (p.weekday === "Sat" || p.weekday === "Sun") continue;
-      for (const slot of slotMinutes().sort((a, b) => b - a)) {
-        if (back > 0 || slot + GRACE_MINUTES <= p.minutes) return { ymd: p.ymd, minutes: slot };
-      }
-    }
-    return null;
+  // When runs are due comes from regime.json (app/schedule.py: the clock's times, weekends and
+  // NYSE holidays skipped). The page only compares that list with the phone's clock.
+  function scheduleState(sched, now) {
+    if (!sched || !(sched.next_runs || []).length) return null;
+    const grace = (sched.grace_minutes ?? 60) * 60000;
+    const runs = sched.next_runs.map((s) => new Date(s));
+    const overdue = runs.filter((r) => r.getTime() + grace <= now.getTime());
+    const next = runs.find((r) => r.getTime() > now.getTime()) || null;
+    return { missed: overdue.length ? overdue[overdue.length - 1] : null, next, closed: sched.closed || [] };
   }
 
-  function nextRun(now) {
-    for (let ahead = 0; ahead < 8; ahead++) {
-      const p = nyParts(new Date(now.getTime() + ahead * 86400000));
-      if (p.weekday === "Sat" || p.weekday === "Sun") continue;
-      for (const slot of slotMinutes().sort((a, b) => a - b)) {
-        if (ahead > 0 || slot > p.minutes) return `${ahead === 0 ? "today" : ahead === 1 ? "tomorrow" : p.weekday} ${clock(slot)} ET`;
-      }
-    }
-    return "";
+  function missedRun(sched) {
+    const st = scheduleState(sched, new Date());
+    if (!st || !st.missed) return null;
+    const p = nyParts(st.missed);
+    return `The ${clock(p.minutes)} update on ${dayLabel(p.ymd)} didn't publish. You're looking at an older read; check the regime-engine Actions tab or Pheme in Discord.`;
   }
 
-  function missedRun(asOfIso) {
-    const expected = lastExpectedRun(new Date());
-    if (!expected) return null;
-    const read = nyParts(new Date(asOfIso));
-    const readKey = `${read.ymd} ${String(read.minutes).padStart(4, "0")}`;
-    const expKey = `${expected.ymd} ${String(expected.minutes).padStart(4, "0")}`;
-    if (readKey >= expKey) return null;
-    return `The ${clock(expected.minutes)} update on ${dayLabel(expected.ymd)} didn't publish. You're looking at an older read; check the regime-engine Actions tab or Pheme in Discord.`;
+  // "market closed today (Thanksgiving) · next update Fri 6:00 AM ET"
+  function scheduleLine(sched) {
+    const now = new Date();
+    const st = scheduleState(sched, now);
+    if (!st) return "";
+    const today = nyParts(now).ymd;
+    const parts = [];
+    const closedToday = st.closed.find((c) => c.date === today);
+    if (closedToday) parts.push(`market closed today (${closedToday.name})`);
+    if (st.next) {
+      const p = nyParts(st.next);
+      const day = p.ymd === today ? "today" : p.ymd === nyParts(new Date(now.getTime() + DAY_MS)).ymd ? "tomorrow" : p.weekday;
+      const skipped = st.closed.filter((c) => c.date > today && c.date < p.ymd);
+      const why = skipped.length ? ` (closed ${skipped.map((c) => `${dayLabel(c.date).split(",")[0]} for ${c.name}`).join(", ")})` : "";
+      parts.push(`next update ${day} ${clock(p.minutes)} ET${why}`);
+    }
+    return parts.join(" · ");
   }
 
   // --- The cycle -----------------------------------------------------------------------------
@@ -755,7 +757,7 @@
   }
 
   function renderQuality(status) {
-    const missed = missedRun(status.as_of);
+    const missed = missedRun(status.schedule);
     if (missed) { $("missed").hidden = false; $("missed").textContent = missed; }
     const q = status.data_quality;
     if (!q) return;
@@ -781,8 +783,8 @@
     const when = nyTime(status.as_of, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
     $("updated").textContent = `${when} ET`;
     const session = status.today && status.today.us_session;
-    const next = nextRun(new Date());
-    $("dataline").innerHTML = `${session ? `US data: <b>${esc(dayLabel(session))} close</b>` : "US data unavailable"}${next ? ` · next update ${esc(next)}` : ""}`;
+    const when_next = scheduleLine(status.schedule);
+    $("dataline").innerHTML = `${session ? `US data: <b>${esc(dayLabel(session))} close</b>` : "US data unavailable"}${when_next ? ` · ${esc(when_next)}` : ""}`;
     if (status.stale) { $("stale").hidden = false; $("stale").textContent = status.stale_reason || "Live data was unavailable; showing the last good read."; }
     renderQuality(status);
     if (status.cycle) renderCycle(status.cycle);
